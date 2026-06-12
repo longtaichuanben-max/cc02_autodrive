@@ -15,8 +15,8 @@ setup(
     zip_safe=True,
     maintainer='ryutakawamoto',
     maintainer_email='longtaichuanben@gmail.com',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='研究活動:PID制御による自律走行',
+    license='BSD-3-Clause',
     extras_require={
         'test': [
             'pytest',
