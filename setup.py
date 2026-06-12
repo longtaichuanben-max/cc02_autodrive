@@ -24,6 +24,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'pid_node = cc02_autodrive.pid_controller:main'
         ],
     },
 )
