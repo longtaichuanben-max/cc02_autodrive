@@ -16,7 +16,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         # /gnss/nmea_solution というコンセントから、GnssSolution 型のデータを受け取る設定
         self.gnss_sub = self.create_subscription(
             GnssSolution,
-            '/gnss/nmea_solution',  # データが届くコンセントの名前
+            '/gnss/solution',  # データが届くコンセントの名前
             self.gnss_callback,  # データが届くたびにこの関数を呼び出す
             10
         )
