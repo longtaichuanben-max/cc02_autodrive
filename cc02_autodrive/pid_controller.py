@@ -26,12 +26,16 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.current_y = 0.0
 
     def gnss_callback(self, msg):
-        # 🌟 データが届いた瞬間に実行される関数
+        status = msg.status  # 1:FIX(最高精度), 2:FLOAT, 5:SPP(単独測位), 0:無効
+
+        # 🌟 追加：Statusが0（空っぽのノイズ）なら、ここで処理をストップして無視する！
+        if status == 0:
+            return
+        
         self.current_x = msg.pos_enu.x
         self.current_y = msg.pos_enu.y
-        status = msg.status  # 1ならRTK Fix（最高精度）
         
-        # 届いた現在地を画面に表示する
+        # 届いた本物の現在地を画面に表示する
         self.get_logger().info(f'📍 現在地を受信！ X:{self.current_x:.2f}m, Y:{self.current_y:.2f}m, Status:{status}')
 
     def publish_test_command(self):
