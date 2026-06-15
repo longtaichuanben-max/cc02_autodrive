@@ -27,10 +27,6 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
 
     def gnss_callback(self, msg):
         status = msg.status  # 1:FIX(最高精度), 2:FLOAT, 5:SPP(単独測位), 0:無効
-
-        # 🌟 追加：Statusが0（空っぽのノイズ）なら、ここで処理をストップして無視する！
-        if status == 0:
-            return
         
         self.current_x = msg.pos_enu.x
         self.current_y = msg.pos_enu.y
