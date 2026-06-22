@@ -1,0 +1,117 @@
+[0.000000] (-) TimerEvent: {}
+[0.001573] (cc02_autodrive) JobQueued: {'identifier': 'cc02_autodrive', 'dependencies': OrderedDict()}
+[0.002693] (cc02_autodrive) JobStarted: {'identifier': 'cc02_autodrive'}
+[0.099306] (-) TimerEvent: {}
+[0.199927] (-) TimerEvent: {}
+[0.301471] (-) TimerEvent: {}
+[0.402196] (-) TimerEvent: {}
+[0.502780] (-) TimerEvent: {}
+[0.603388] (-) TimerEvent: {}
+[0.704084] (-) TimerEvent: {}
+[0.804700] (-) TimerEvent: {}
+[0.905574] (-) TimerEvent: {}
+[1.006477] (-) TimerEvent: {}
+[1.107588] (-) TimerEvent: {}
+[1.208175] (-) TimerEvent: {}
+[1.308752] (-) TimerEvent: {}
+[1.409353] (-) TimerEvent: {}
+[1.510016] (-) TimerEvent: {}
+[1.610680] (-) TimerEvent: {}
+[1.711268] (-) TimerEvent: {}
+[1.811899] (-) TimerEvent: {}
+[1.912477] (-) TimerEvent: {}
+[2.013091] (-) TimerEvent: {}
+[2.113710] (-) TimerEvent: {}
+[2.214253] (-) TimerEvent: {}
+[2.314901] (-) TimerEvent: {}
+[2.415655] (-) TimerEvent: {}
+[2.516303] (-) TimerEvent: {}
+[2.616902] (-) TimerEvent: {}
+[2.717461] (-) TimerEvent: {}
+[2.818185] (-) TimerEvent: {}
+[2.918812] (-) TimerEvent: {}
+[3.019459] (-) TimerEvent: {}
+[3.120100] (-) TimerEvent: {}
+[3.220707] (-) TimerEvent: {}
+[3.321277] (-) TimerEvent: {}
+[3.421885] (-) TimerEvent: {}
+[3.522463] (-) TimerEvent: {}
+[3.623098] (-) TimerEvent: {}
+[3.723857] (-) TimerEvent: {}
+[3.824543] (-) TimerEvent: {}
+[3.925326] (-) TimerEvent: {}
+[4.026368] (-) TimerEvent: {}
+[4.056929] (cc02_autodrive) Command: {'cmd': ['/usr/bin/python3', '-W', 'ignore:setup.py install is deprecated', '-W', 'ignore:easy_install command is deprecated', 'setup.py', 'egg_info', '--egg-base', 'build/cc02_autodrive', 'build', '--build-base', '/home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build', 'install', '--record', '/home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/install.log', '--single-version-externally-managed', 'install_data'], 'cwd': '/home/ryutakawamoto/ros2_ws/src/cc02_autodrive', 'env': {'PYTHON_BASIC_REPL': '1', 'LESSOPEN': '| /usr/bin/lesspipe %s', 'LANGUAGE': 'ja:en', 'USER': 'ryutakawamoto', 'SSH_CLIENT': '192.168.100.50 60336 22', 'LC_TIME': 'ja_JP.UTF-8', 'XDG_SESSION_TYPE': 'tty', 'GIT_ASKPASS': '/home/ryutakawamoto/.vscode-server/cli/servers/Stable-fcf604774b9f2674b473065736ee75077e256353/server/extensions/git/dist/askpass.sh', 'SHLVL': '1', 'LD_LIBRARY_PATH': '/home/ryutakawamoto/ros2_ws/install/gnss_ros_standardization/lib:/opt/ros/jazzy/opt/rviz_ogre_vendor/lib:/opt/ros/jazzy/lib/aarch64-linux-gnu:/opt/ros/jazzy/opt/gz_math_vendor/lib:/opt/ros/jazzy/opt/gz_utils_vendor/lib:/opt/ros/jazzy/opt/gz_cmake_vendor/lib:/opt/ros/jazzy/lib', 'BROWSER': '/home/ryutakawamoto/.vscode-server/cli/servers/Stable-fcf604774b9f2674b473065736ee75077e256353/server/bin/helpers/browser.sh', 'HOME': '/home/ryutakawamoto', 'OLDPWD': '/home/ryutakawamoto/ros2_ws/src', 'TERM_PROGRAM_VERSION': '1.125.1', 'VSCODE_IPC_HOOK_CLI': '/run/user/1000/vscode-ipc-54539167-34da-4914-b5af-9aaf4303bda3.sock', 'ROS_PYTHON_VERSION': '3', 'VSCODE_GIT_ASKPASS_MAIN': '/home/ryutakawamoto/.vscode-server/cli/servers/Stable-fcf604774b9f2674b473065736ee75077e256353/server/extensions/git/dist/askpass-main.js', 'LC_MONETARY': 'ja_JP.UTF-8', 'VSCODE_GIT_ASKPASS_NODE': '/home/ryutakawamoto/.vscode-server/cli/servers/Stable-fcf604774b9f2674b473065736ee75077e256353/server/node', 'PYDEVD_DISABLE_FILE_VALIDATION': '1', 'BUNDLED_DEBUGPY_PATH': '/home/ryutakawamoto/.vscode-server/extensions/ms-python.debugpy-2026.6.0-linux-arm64/bundled/libs/debugpy', 'VSCODE_PYTHON_AUTOACTIVATE_GUARD': '1', 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=/run/user/1000/bus', 'COLORTERM': 'truecolor', 'DEBUGINFOD_URLS': 'https://debuginfod.ubuntu.com', 'COLCON_PREFIX_PATH': '/home/ryutakawamoto/ros2_ws/install', 'ROS_DISTRO': 'jazzy', 'LOGNAME': 'ryutakawamoto', '_': '/usr/bin/colcon', 'ROS_VERSION': '2', 'CLAUDE_CODE_SSE_PORT': '28796', 'XDG_SESSION_CLASS': 'user', 'TERM': 'xterm-256color', 'XDG_SESSION_ID': '3', 'PATH': '/home/ryutakawamoto/.vscode-server/data/User/globalStorage/github.copilot-chat/debugCommand:/home/ryutakawamoto/.vscode-server/data/User/globalStorage/github.copilot-chat/copilotCli:/home/ryutakawamoto/.vscode-server/cli/servers/Stable-fcf604774b9f2674b473065736ee75077e256353/server/bin/remote-cli:/opt/ros/jazzy/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/home/ryutakawamoto/.vscode-server/extensions/ms-python.debugpy-2026.6.0-linux-arm64/bundled/scripts/noConfigScripts', 'PAPERSIZE': 'a4', 'LC_ADDRESS': 'ja_JP.UTF-8', 'XDG_RUNTIME_DIR': '/run/user/1000', 'VSCODE_DEBUGPY_ADAPTER_ENDPOINTS': '/home/ryutakawamoto/.vscode-server/extensions/ms-python.debugpy-2026.6.0-linux-arm64/.noConfigDebugAdapterEndpoints/endpoint-c3e0d8be434c1f65.txt', 'LANG': 'ja_JP.UTF-8', 'PYTHONSTARTUP': '/home/ryutakawamoto/.vscode-server/data/User/workspaceStorage/54f9b62af260fbca0f4008b431f798dd/ms-python.python/pythonrc.py', 'LC_TELEPHONE': 'ja_JP.UTF-8', 'LS_COLORS': 'rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=00:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.avif=01;35:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.webp=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:*~=00;90:*#=00;90:*.bak=00;90:*.crdownload=00;90:*.dpkg-dist=00;90:*.dpkg-new=00;90:*.dpkg-old=00;90:*.dpkg-tmp=00;90:*.old=00;90:*.orig=00;90:*.part=00;90:*.rej=00;90:*.rpmnew=00;90:*.rpmorig=00;90:*.rpmsave=00;90:*.swp=00;90:*.tmp=00;90:*.ucf-dist=00;90:*.ucf-new=00;90:*.ucf-old=00;90:', 'VSCODE_GIT_IPC_HANDLE': '/run/user/1000/vscode-git-8f39e57a0b.sock', 'TERM_PROGRAM': 'vscode', 'AMENT_PREFIX_PATH': '/home/ryutakawamoto/ros2_ws/install/cc02_autodrive:/home/ryutakawamoto/ros2_ws/install/rc_car_driver:/home/ryutakawamoto/ros2_ws/install/gnss_ros_standardization:/opt/ros/jazzy', 'SHELL': '/bin/bash', 'LC_NAME': 'ja_JP.UTF-8', 'LESSCLOSE': '/usr/bin/lesspipe %s %s', 'LC_MEASUREMENT': 'ja_JP.UTF-8', 'LC_IDENTIFICATION': 'ja_JP.UTF-8', 'ROS_AUTOMATIC_DISCOVERY_RANGE': 'SUBNET', 'VSCODE_GIT_ASKPASS_EXTRA_ARGS': '', 'PWD': '/home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive', 'COPILOT_DEBUG_NONCE': 'c0d1266dd5436115bf9bdb7fb935a2fb', 'SSH_CONNECTION': '192.168.100.50 60336 192.168.100.66 22', 'XDG_DATA_DIRS': '/usr/share/gnome:/usr/local/share:/usr/share:/var/lib/snapd/desktop', 'PYTHONPATH': '/home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages:/home/ryutakawamoto/ros2_ws/install/cc02_autodrive/lib/python3.12/site-packages:/home/ryutakawamoto/ros2_ws/install/rc_car_driver/lib/python3.12/site-packages:/home/ryutakawamoto/ros2_ws/install/gnss_ros_standardization/lib/python3.12/site-packages:/opt/ros/jazzy/lib/python3.12/site-packages', 'LC_NUMERIC': 'ja_JP.UTF-8', 'LC_PAPER': 'ja_JP.UTF-8', 'COLCON': '1', 'CMAKE_PREFIX_PATH': '/home/ryutakawamoto/ros2_ws/install/gnss_ros_standardization:/opt/ros/jazzy/opt/gz_math_vendor:/opt/ros/jazzy/opt/gz_utils_vendor:/opt/ros/jazzy/opt/gz_cmake_vendor'}, 'shell': False}
+[4.126543] (-) TimerEvent: {}
+[4.227306] (-) TimerEvent: {}
+[4.328091] (-) TimerEvent: {}
+[4.428718] (-) TimerEvent: {}
+[4.529364] (-) TimerEvent: {}
+[4.630017] (-) TimerEvent: {}
+[4.730674] (-) TimerEvent: {}
+[4.831446] (-) TimerEvent: {}
+[4.932063] (-) TimerEvent: {}
+[5.032691] (-) TimerEvent: {}
+[5.133414] (-) TimerEvent: {}
+[5.234053] (-) TimerEvent: {}
+[5.324871] (cc02_autodrive) StdoutLine: {'line': b'running egg_info\n'}
+[5.326575] (cc02_autodrive) StdoutLine: {'line': b'creating build/cc02_autodrive/cc02_autodrive.egg-info\n'}
+[5.334241] (-) TimerEvent: {}
+[5.418903] (cc02_autodrive) StdoutLine: {'line': b'writing build/cc02_autodrive/cc02_autodrive.egg-info/PKG-INFO\n'}
+[5.420209] (cc02_autodrive) StdoutLine: {'line': b'writing dependency_links to build/cc02_autodrive/cc02_autodrive.egg-info/dependency_links.txt\n'}
+[5.421088] (cc02_autodrive) StdoutLine: {'line': b'writing entry points to build/cc02_autodrive/cc02_autodrive.egg-info/entry_points.txt\n'}
+[5.421879] (cc02_autodrive) StdoutLine: {'line': b'writing requirements to build/cc02_autodrive/cc02_autodrive.egg-info/requires.txt\n'}
+[5.422544] (cc02_autodrive) StdoutLine: {'line': b'writing top-level names to build/cc02_autodrive/cc02_autodrive.egg-info/top_level.txt\n'}
+[5.423229] (cc02_autodrive) StdoutLine: {'line': b"writing manifest file 'build/cc02_autodrive/cc02_autodrive.egg-info/SOURCES.txt'\n"}
+[5.434375] (-) TimerEvent: {}
+[5.534954] (-) TimerEvent: {}
+[5.615010] (cc02_autodrive) StdoutLine: {'line': b"reading manifest file 'build/cc02_autodrive/cc02_autodrive.egg-info/SOURCES.txt'\n"}
+[5.618066] (cc02_autodrive) StdoutLine: {'line': b"writing manifest file 'build/cc02_autodrive/cc02_autodrive.egg-info/SOURCES.txt'\n"}
+[5.619058] (cc02_autodrive) StdoutLine: {'line': b'running build\n'}
+[5.619583] (cc02_autodrive) StdoutLine: {'line': b'running build_py\n'}
+[5.620248] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build\n'}
+[5.621068] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib\n'}
+[5.621778] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive\n'}
+[5.622353] (cc02_autodrive) StdoutLine: {'line': b'copying cc02_autodrive/__init__.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive\n'}
+[5.622986] (cc02_autodrive) StdoutLine: {'line': b'copying cc02_autodrive/pid_controller.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive\n'}
+[5.623585] (cc02_autodrive) StdoutLine: {'line': b'copying cc02_autodrive/mouse_trigger_node.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive\n'}
+[5.624750] (cc02_autodrive) StdoutLine: {'line': b'running install\n'}
+[5.635127] (-) TimerEvent: {}
+[5.649937] (cc02_autodrive) StdoutLine: {'line': b'running install_lib\n'}
+[5.735286] (-) TimerEvent: {}
+[5.751939] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive\n'}
+[5.752717] (cc02_autodrive) StdoutLine: {'line': b'copying /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive/__init__.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive\n'}
+[5.753500] (cc02_autodrive) StdoutLine: {'line': b'copying /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive/pid_controller.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive\n'}
+[5.754637] (cc02_autodrive) StdoutLine: {'line': b'copying /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/build/lib/cc02_autodrive/mouse_trigger_node.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive\n'}
+[5.757844] (cc02_autodrive) StdoutLine: {'line': b'byte-compiling /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive/__init__.py to __init__.cpython-312.pyc\n'}
+[5.759343] (cc02_autodrive) StdoutLine: {'line': b'byte-compiling /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive/pid_controller.py to pid_controller.cpython-312.pyc\n'}
+[5.769973] (cc02_autodrive) StdoutLine: {'line': b'byte-compiling /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive/mouse_trigger_node.py to mouse_trigger_node.cpython-312.pyc\n'}
+[5.774003] (cc02_autodrive) StdoutLine: {'line': b'running install_data\n'}
+[5.774766] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/ament_index\n'}
+[5.775524] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/ament_index/resource_index\n'}
+[5.776190] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/ament_index/resource_index/packages\n'}
+[5.776803] (cc02_autodrive) StdoutLine: {'line': b'copying resource/cc02_autodrive -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/ament_index/resource_index/packages\n'}
+[5.777864] (cc02_autodrive) StdoutLine: {'line': b'copying package.xml -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/cc02_autodrive\n'}
+[5.778815] (cc02_autodrive) StdoutLine: {'line': b'copying cc02_autodrive/wp_position.csv -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/cc02_autodrive\n'}
+[5.780293] (cc02_autodrive) StdoutLine: {'line': b'creating /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/cc02_autodrive/launch\n'}
+[5.781093] (cc02_autodrive) StdoutLine: {'line': b'copying launch/autodrive_bringup.launch.py -> /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/share/cc02_autodrive/launch\n'}
+[5.781726] (cc02_autodrive) StdoutLine: {'line': b'running install_egg_info\n'}
+[5.835447] (-) TimerEvent: {}
+[5.884020] (cc02_autodrive) StdoutLine: {'line': b'Copying build/cc02_autodrive/cc02_autodrive.egg-info to /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/python3.12/site-packages/cc02_autodrive-0.0.0-py3.12.egg-info\n'}
+[5.889809] (cc02_autodrive) StdoutLine: {'line': b'running install_scripts\n'}
+[5.935630] (-) TimerEvent: {}
+[6.036259] (-) TimerEvent: {}
+[6.136894] (-) TimerEvent: {}
+[6.237461] (-) TimerEvent: {}
+[6.338158] (-) TimerEvent: {}
+[6.438861] (-) TimerEvent: {}
+[6.539508] (-) TimerEvent: {}
+[6.633235] (cc02_autodrive) StdoutLine: {'line': b'Installing mouse_trigger_node script to /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/cc02_autodrive\n'}
+[6.634208] (cc02_autodrive) StdoutLine: {'line': b'Installing pid_node script to /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/cc02_autodrive\n'}
+[6.635018] (cc02_autodrive) StdoutLine: {'line': b'Installing pid_node_v2 script to /home/ryutakawamoto/ros2_ws/src/cc02_autodrive/install/cc02_autodrive/lib/cc02_autodrive\n'}
+[6.636645] (cc02_autodrive) StdoutLine: {'line': b"writing list of installed files to '/home/ryutakawamoto/ros2_ws/src/cc02_autodrive/build/cc02_autodrive/install.log'\n"}
+[6.639815] (-) TimerEvent: {}
+[6.740864] (-) TimerEvent: {}
+[6.785843] (cc02_autodrive) CommandEnded: {'returncode': 0}
+[6.831048] (cc02_autodrive) JobEnded: {'identifier': 'cc02_autodrive', 'rc': 0}
+[6.834056] (-) EventReactorShutdown: {}

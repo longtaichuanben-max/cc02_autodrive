@@ -1,0 +1,8 @@
+Metadata-Version: 2.1
+Name: cc02-autodrive
+Version: 0.0.0
+Summary: 研究活動:PID制御による自律走行
+Maintainer: ryutakawamoto
+Maintainer-email: longtaichuanben@gmail.com
+License: BSD-3-Clause
+Provides-Extra: test

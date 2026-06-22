@@ -21,11 +21,11 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.declare_parameter('wp_radius', 1.0)                # m: この距離以内でWP到達とみなす
         self.declare_parameter('speed_fix',   2.0)              # m/s: RTK-FIX時の速度
         self.declare_parameter('speed_float', 1.5)              # m/s: RTK-FLOAT時の速度
-        self.declare_parameter('kp_gain',    1.0)               # ステアリングPIDゲイン（比例）
+        self.declare_parameter('kp_gain',    0.7)               # ステアリングPIDゲイン（比例）
         self.declare_parameter('ki_gain',    0.0)               # ステアリングPIDゲイン（積分）
         self.declare_parameter('kd_gain',    0.1)               # ステアリングPIDゲイン（微分）
         self.declare_parameter('max_steering_angle', 0.5)       # rad: ステアリング最大角（≈28.6°）
-        self.declare_parameter('bootstrap_speed', 0.1)         # 方位を確定させるために、最初の数秒間はこの速度で走行する
+        self.declare_parameter('bootstrap_speed', 0.15)         # 方位を確定させるために、最初の数秒間はこの速度で走行する
         self.declare_parameter('min_speed_for_heading', 0.1)    # m/s: この速度以上でvel_enuのヘディングを信頼する。要するにドップラーノイズのフィルタリング
         self.declare_parameter('max_speed_mps', 2.0)            # m/s: 速度の安全上限（誤設定時の暴走防止）後で再設定
         self.declare_parameter('derivative_filter_alpha', 0.2)  # 微分項ローパスフィルタ係数（小さいほど滑らか）
