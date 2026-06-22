@@ -15,7 +15,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
     def __init__(self):#クラスの初期化関数。クラスが呼び出されたときに最初に実行される特別な関数。(1回だけ実行される)
         super().__init__('pid_controller')#Nodeクラスの初期化関数を呼び出している。引数の 'pid_controller' は、このノードの名前になる。子供
         self.get_logger().info('PID Controller Node has been started!')#このノードが起動したときに、ログに「PID Controller Node has been started!」というメッセージを表示する。self.get_logger()は、このノード専用のロガー（ログを記録する道具）を取得するための関数。info()は、そのロガーを使って情報レベルのログメッセージを出力するための関数。
-        
+
         #パラメータの宣言（ROS2のパラメータサーバーに宣言）
         self.declare_parameter('wp_file', 'wp_position.csv')#ROS2のパラメータを宣言している。パラメータ名は 'waypoint_file'、デフォルト値は 'waypoints.csv' になる。
         self.declare_parameter('wp_radius', 1.0)                # m: この距離以内でWP到達とみなす
@@ -56,7 +56,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             raise SystemExit(1)
         #waypointファイルが読み込めた場合のログ出力
         self.get_logger().info(f'Waypoint {len(self.wps_llh)}点 読み込み完了: {wp_file}')
-        
+
         self.waypoints = None  # ENU変換後の(x, y)リスト。原点確定後にセットされる
         self.waypoint_index = 0
         self.origin_ecef = None      # GNSS ENU原点（ECEF）。最初の有効Fixで一度だけ確定
@@ -143,7 +143,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             f'最初の目標 → X={self.waypoints[0][0]:.2f}m, Y={self.waypoints[0][1]:.2f}m'
         )
         return True
-    
+
     #GNSSコールバック
     def _gnss_callback(self, msg: GnssSolution):
         # FIX/FLOAT以外（無効・SPP・SBAS・DGPS等）は精度不足として無視する
@@ -285,7 +285,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
 
     def _publish_stop(self):
         self._publish_command(0.0, 0.0)
-    
+
 def main(args=None):
     rclpy.init(args=args)#ros2の通信エンジンを始動。
     node = PidController()#ラズパイのメモリ上でノードを本当に起動する。
