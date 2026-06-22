@@ -18,9 +18,9 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         
         #パラメータの宣言（ROS2のパラメータサーバーに宣言）
         self.declare_parameter('wp_file', 'wp_position.csv')#ROS2のパラメータを宣言している。パラメータ名は 'waypoint_file'、デフォルト値は 'waypoints.csv' になる。
-        self.declare_parameter('wp_radius', 0.3)                # m: この距離以内でWP到達とみなす
-        self.declare_parameter('speed_fix',   0.5)              # m/s: RTK-FIX時の速度
-        self.declare_parameter('speed_float', 0.3)              # m/s: RTK-FLOAT時の速度
+        self.declare_parameter('wp_radius', 1.0)                # m: この距離以内でWP到達とみなす
+        self.declare_parameter('speed_fix',   1.0)              # m/s: RTK-FIX時の速度
+        self.declare_parameter('speed_float', 0.8)              # m/s: RTK-FLOAT時の速度
         self.declare_parameter('kp_gain',    1.0)               # ステアリングPIDゲイン（比例）
         self.declare_parameter('ki_gain',    0.0)               # ステアリングPIDゲイン（積分）
         self.declare_parameter('kd_gain',    0.1)               # ステアリングPIDゲイン（微分）
@@ -29,6 +29,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.declare_parameter('min_speed_for_heading', 0.1)    # m/s: この速度以上でvel_enuのヘディングを信頼する。要するにドップラーノイズのフィルタリング
         self.declare_parameter('max_speed_mps', 1.0)            # m/s: 速度の安全上限（誤設定時の暴走防止）後で再設定
         self.declare_parameter('derivative_filter_alpha', 0.2)  # 微分項ローパスフィルタ係数（小さいほど滑らか）
+        self.declare_parameter('gnss_timeout_s', 2.0)           # 秒: は基準局RTCM補正が1Hzのため、0.5秒で毎周期引っかかる
         #wp_fileはwaypointファイルの読み込みにしか使わない
         wp_file                     = self.get_parameter('wp_file').value
         #self.を付けることでクラスの中でいつでも使える共通の変数になる。self.を付けないと、関数の中でしか使えないローカル変数になる。
@@ -43,6 +44,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.min_speed_for_heading  = self.get_parameter('min_speed_for_heading').value
         self.max_speed              = self.get_parameter('max_speed_mps').value
         self.deriv_alpha            = self.get_parameter('derivative_filter_alpha').value
+        self.gnss_timeout_s          = self.get_parameter('gnss_timeout_s').value
         #waypointファイルの読み込み
         self.wps_llh             = self._load_waypoints_llh(wp_file)
         #waypointファイルが読み込めなかった場合のエラー処理（暴走防止）
@@ -78,8 +80,8 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.cmd_pub        = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)#self.create_publisher(送信するデータの「言語（型）」, 送信先のトピック名, キューサイズ)
         self.gnss_sub       = self.create_subscription(GnssSolution,'/gnss/solution',self._gnss_callback,10)#self.create_subscription(受信するデータの「言語（型）」, 受信するトピック名, 受信したときに呼び出す関数, キューサイズ)
         self.start_stop_sub = self.create_subscription(Bool, '/mouse_start_stop', self._start_stop_callback, 10)
-        #GNSSが0.5秒以上途絶えたら安全停止
-        self.create_timer(0.5, self._safety_check)#self.create_timer(周期, 呼び出す関数)
+        #GNSSがgnss_timeout_s秒以上途絶えたら安全停止
+        self.create_timer(0.1, self._safety_check)#self.create_timer(周期, 呼び出す関数)
         #このノードの起動が完了したことをログに出力する
         self.get_logger().info('pid_controller 起動完了（GNSS ENU原点確定待ち）')
     #Waypointファイル読み込み（緯度経度のみ、ENU変換は行わない）
@@ -270,7 +272,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
     # 安全停止チェック
     def _safety_check(self):
         elapsed = (self.get_clock().now() - self.last_gnss_time).nanoseconds / 1e9
-        if elapsed > 0.5:
+        if elapsed > self.gnss_timeout_s:
             self.get_logger().warn(f'GNSSデータが{elapsed:.1f}秒途絶えています → 安全停止')
             self._publish_stop()
 
