@@ -1,3 +1,6 @@
+import os
+from glob import glob
+
 from setuptools import find_packages, setup
 
 package_name = 'cc02_autodrive'
@@ -9,7 +12,11 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
-        ('share/' + package_name, ['package.xml']),
+        ('share/' + package_name, [
+            'package.xml',
+            'cc02_autodrive/wp_position.csv',
+        ]),
+        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,7 +31,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'pid_node = cc02_autodrive.pid_controller:main'
+            'pid_node = cc02_autodrive.pid_controller:main',
+            'pid_node_v2 = cc02_autodrive.pid_controller_v2:main',
+            'mouse_trigger_node = cc02_autodrive.mouse_trigger_node:main',
         ],
     },
 )

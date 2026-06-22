@@ -6,6 +6,7 @@ import rclpy #ROS2の機能をPythonで使うための超巨大な道具箱(rasp
 from rclpy.node import Node#道具箱（rclpy）の中から、特に重要な Node（ノード＝プログラムの本体になる部品） という道具をピンポイントで取り出している
 from ackermann_msgs.msg import AckermannDriveStamped  # 追加：自動運転の標準的な「手足」の命令メッセージ
 from gnss_ros_standardization.msg import GnssSolution  #GNSSデータのメッセージ
+from std_msgs.msg import Bool  #マウス左クリックの開始/停止トグル用
 
 # このプロジェクトで自動運転に使う十分な精度とみなすStatus
 _VALID_STATUSES = (GnssSolution.STATUS_FIX, GnssSolution.STATUS_FLOAT)
@@ -31,7 +32,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         #wp_fileはwaypointファイルの読み込みにしか使わない
         wp_file                     = self.get_parameter('wp_file').value
         #self.を付けることでクラスの中でいつでも使える共通の変数になる。self.を付けないと、関数の中でしか使えないローカル変数になる。
-        self.wp_radius              = self.get_parameter('wp_radius').value
+        self.waypoint_radius         = self.get_parameter('wp_radius').value
         self.speed_fix              = self.get_parameter('speed_fix').value
         self.speed_float            = self.get_parameter('speed_float').value
         self.kp                     = self.get_parameter('kp_gain').value
@@ -41,7 +42,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.bootstrap_speed        = self.get_parameter('bootstrap_speed').value
         self.min_speed_for_heading  = self.get_parameter('min_speed_for_heading').value
         self.max_speed              = self.get_parameter('max_speed_mps').value
-        self.dervative_filter_alpha = self.get_parameter('derivative_filter_alpha').value
+        self.deriv_alpha            = self.get_parameter('derivative_filter_alpha').value
         #waypointファイルの読み込み
         self.wps_llh             = self._load_waypoints_llh(wp_file)
         #waypointファイルが読み込めなかった場合のエラー処理（暴走防止）
@@ -54,7 +55,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         #waypointファイルが読み込めた場合のログ出力
         self.get_logger().info(f'Waypoint {len(self.wps_llh)}点 読み込み完了: {wp_file}')
         
-        self.wps = None        # ENU変換後の(x, y)リスト。原点確定後にセットされる
+        self.waypoints = None  # ENU変換後の(x, y)リスト。原点確定後にセットされる
         self.waypoint_index = 0
         self.origin_ecef = None      # GNSS ENU原点（ECEF）。最初の有効Fixで一度だけ確定
 
@@ -71,9 +72,12 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         #安全停止用
         #self.clock().now()は、ROS2のノードが持っている時計から現在の時間を取得するための関数。これを使って、最後にGNSSデータを受け取った時間を記録しておくことで、一定時間以上GNSSデータが更新されない場合に安全停止するための処理を実装する
         self.last_gnss_time = self.get_clock().now()
+        #マウス左クリックによる開始/停止トグル（mouse_trigger_node から制御）
+        self.is_running = False
         #Publisher/Subscriber/Timer
         self.cmd_pub        = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)#self.create_publisher(送信するデータの「言語（型）」, 送信先のトピック名, キューサイズ)
         self.gnss_sub       = self.create_subscription(GnssSolution,'/gnss/solution',self._gnss_callback,10)#self.create_subscription(受信するデータの「言語（型）」, 受信するトピック名, 受信したときに呼び出す関数, キューサイズ)
+        self.start_stop_sub = self.create_subscription(Bool, '/mouse_start_stop', self._start_stop_callback, 10)
         #GNSSが0.5秒以上途絶えたら安全停止
         self.create_timer(0.5, self._safety_check)#self.create_timer(周期, 呼び出す関数)
         #このノードの起動が完了したことをログに出力する
@@ -97,7 +101,22 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             self.get_logger().error(f'Waypoint読み込みエラー: {e}')
             return []
         return waypoints
-    
+
+    #マウス左クリックによる開始/停止トグル
+    def _start_stop_callback(self, msg: Bool):
+        if msg.data and not self.is_running:
+            # 開始時はPID内部状態をリセット（停止中の積分・微分の蓄積を引き継がない）
+            self.integral_error = 0.0
+            self.filtered_deriv = 0.0
+            self.prev_error = 0.0
+            self.prev_time = None
+            self.get_logger().info('▶️ 走行開始（マウス左クリック）')
+        elif not msg.data and self.is_running:
+            self.get_logger().info('⏸ 走行停止（マウス左クリック）')
+            self._publish_stop()
+
+        self.is_running = msg.data
+
     #GNSS原点確定とENU変換
     def _resolve_origin_and_convert(self, msg: GnssSolution) -> bool:
         ox = msg.pos_enu_org_ecef.x
@@ -112,7 +131,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         origin_lat, origin_lon, origin_alt = pm.ecef2geodetic(ox, oy, oz)
 
         converted = []
-        for lat_deg, lon_deg, height in self.waypoints_llh:
+        for lat_deg, lon_deg, height in self.wps_llh:
             e, n, _u = pm.geodetic2enu(lat_deg, lon_deg, height, origin_lat, origin_lon, origin_alt)
             converted.append((float(e), float(n)))
 
@@ -152,6 +171,11 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             f'GNSS: X={self.current_x:.2f}m  Y={self.current_y:.2f}m  '
             f'Status={self.current_status}  speed={speed:.2f}m/s'
         )
+
+        # マウスで未開始（または停止中）の間は、ヘディング推定だけ続けて走行はしない
+        if not self.is_running:
+            self._publish_stop()
+            return
 
         # 全Waypoint完了チェック
         if self.waypoint_index >= len(self.waypoints):
