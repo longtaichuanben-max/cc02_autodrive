@@ -32,6 +32,9 @@ setup(
     entry_points={
         'console_scripts': [
             'pid_node = cc02_autodrive.pid_controller:main',
+            'stanley_node = cc02_autodrive.stanley_controller:main',
+            'gnss_logger_node = cc02_autodrive.gnss_logger:main',
+            'plot_log_map = cc02_autodrive.plot_log_map:main',
         ],
     },
 )

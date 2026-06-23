@@ -18,12 +18,12 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         #パラメータの宣言（ROS2のパラメータサーバーに宣言）
         self.declare_parameter('wp_file', 'wp_position.csv')#ROS2のパラメータを宣言している。パラメータ名は 'waypoint_file'、デフォルト値は 'waypoints.csv' になる。
         self.declare_parameter('wp_radius', 1.0)                # m: この距離以内でWP到達とみなす
-        self.declare_parameter('speed_fix',   2.0)              # m/s: RTK-FIX時の速度
-        self.declare_parameter('speed_float', 1.5)              # m/s: RTK-FLOAT時の速度
-        self.declare_parameter('kp_gain',    1.0)               # ステアリングPIDゲイン（比例）
-        self.declare_parameter('ki_gain',    0.0)               # ステアリングPIDゲイン（積分）
-        self.declare_parameter('kd_gain',    0.1)               # ステアリングPIDゲイン（微分）
-        self.declare_parameter('max_steering_angle', 0.5)       # rad: ステアリング最大角（≈28.6°）
+        self.declare_parameter('speed_fix',   0.5)              # m/s: RTK-FIX時の速度
+        self.declare_parameter('speed_float', 0.3)              # m/s: RTK-FLOAT時の速度
+        self.declare_parameter('kp_gain',    0.7)               # ステアリングPIDゲイン（比例）
+        self.declare_parameter('ki_gain',    0.05)               # ステアリングPIDゲイン（積分）
+        self.declare_parameter('kd_gain',    0.2)               # ステアリングPIDゲイン（微分）
+        self.declare_parameter('max_steering_angle', math.radians(25.0))  # rad: ステアリング最大角（rc_car_driverの実測値25°に合わせる）
         self.declare_parameter('bootstrap_speed', 0.1)         # 方位を確定させるために、最初の数秒間はこの速度で走行する
         self.declare_parameter('min_speed_for_heading', 0.1)    # m/s: この速度以上でvel_enuのヘディングを信頼する。要するにドップラーノイズのフィルタリング
         self.declare_parameter('max_speed_mps', 2.0)            # m/s: 速度の安全上限（誤設定時の暴走防止）後で再設定
@@ -73,8 +73,6 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         #安全停止用
         #self.clock().now()は、ROS2のノードが持っている時計から現在の時間を取得するための関数。これを使って、最後にGNSSデータを受け取った時間を記録しておくことで、一定時間以上GNSSデータが更新されない場合に安全停止するための処理を実装する
         self.last_gnss_time = self.get_clock().now()
-        #走行開始フラグ。RTK FIXに初めて到達した時点でTrueになる（手動トリガーなし）
-        self.is_running = False
         #Publisher/Subscriber/Timer
         self.cmd_pub        = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)#self.create_publisher(送信するデータの「言語（型）」, 送信先のトピック名, キューサイズ)
         self.gnss_sub       = self.create_subscription(GnssSolution,'/gnss/solution',self._gnss_callback,10)#self.create_subscription(受信するデータの「言語（型）」, 受信するトピック名, 受信したときに呼び出す関数, キューサイズ)
@@ -152,46 +150,11 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         if speed >= self.min_speed_for_heading:
             self.heading = math.atan2(vn, ve)
 
-        self.get_logger().debug(
-            f'GNSS: X={self.current_x:.2f}m  Y={self.current_y:.2f}m  '
-            f'Status={self.current_status}  speed={speed:.2f}m/s'
+        status_str = 'FIX' if self.current_status == GnssSolution.STATUS_FIX else 'FLOAT'
+        self.get_logger().info(
+            f'GNSS: Status={status_str}  X={self.current_x:.2f}m  Y={self.current_y:.2f}m  '
+            f'speed={speed:.2f}m/s'
         )
-
-        # RTK FIXに初めて到達した時点で自動的に走行を開始する（手動トリガーなし）
-        if not self.is_running:
-            if self.current_status == GnssSolution.STATUS_FIX:
-                self.is_running = True
-                self.integral_error = 0.0
-                self.filtered_deriv = 0.0
-                self.prev_error = 0.0
-                self.prev_time = None
-                self.get_logger().info('▶️ RTK FIXに到達 → 走行開始')
-            else:
-                self._publish_stop()
-                return
-
-        # 全Waypoint完了チェック
-        if self.waypoint_index >= len(self.waypoints):
-            self.get_logger().info('全Waypoint到達！停止します。')
-            self._publish_stop()
-            return
-
-        # 現在Waypointへの距離チェック（到達判定）
-        tx, ty = self.waypoints[self.waypoint_index]
-        dist = math.sqrt((tx - self.current_x) ** 2 + (ty - self.current_y) ** 2)
-
-        if dist < self.waypoint_radius:
-            self.get_logger().info(
-                f'WP[{self.waypoint_index}] 到達（残り{dist:.2f}m）→ 次のWPへ'
-            )
-            self.waypoint_index += 1
-            self.integral_error = 0.0  # WP切替時に積分項をリセット
-            self.prev_error = 0.0
-
-            if self.waypoint_index >= len(self.waypoints):
-                self.get_logger().info('全Waypoint到達！停止します。')
-                self._publish_stop()
-                return
 
         self._control()
 
@@ -212,6 +175,29 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             return
 
         tx, ty = self.waypoints[self.waypoint_index]
+
+        # Waypoint到達判定（wp_radius以内に入ったら次のWPへ）
+        dist_to_wp = math.hypot(tx - self.current_x, ty - self.current_y)
+        if dist_to_wp <= self.waypoint_radius:
+            self.get_logger().info(
+                f'★ WP[{self.waypoint_index}] 通過！ (到達距離={dist_to_wp:.2f}m)'
+            )
+            self.waypoint_index += 1
+            self.integral_error = 0.0
+            self.filtered_deriv = 0.0
+            self.prev_error = 0.0
+            self.prev_time = None
+
+            if self.waypoint_index >= len(self.waypoints):
+                self.get_logger().info('★★★ 全Waypoint走破完了！ → 停止')
+                self.waypoint_index = len(self.waypoints) - 1
+                self._publish_stop()
+                return
+
+            tx, ty = self.waypoints[self.waypoint_index]
+            self.get_logger().info(
+                f'次の目標 → WP[{self.waypoint_index}] X={tx:.2f}m, Y={ty:.2f}m'
+            )
 
         # 目標方位（現在地 → Waypoint の角度）
         bearing = math.atan2(ty - self.current_y, tx - self.current_x)
