@@ -1,11 +1,14 @@
 """
 autodrive_bringup.launch.py
 
-GNSS-RTK waypoint走行に必要な6ノードを一括起動する。
+GNSS-RTK waypoint走行に必要な5ノードを一括起動する。
 
   gnss_ros_standardization: ubx_driver_node, rtcm_decoder_node, real_time_kinematic
-  cc02_autodrive          : pid_node（pid_controller.py）, mouse_trigger_node
+  cc02_autodrive          : pid_node（pid_controller.py）
   rc_car_driver           : vehicle_driver
+
+走行の開始は手動トリガー不要。RTK FIXに初めて到達した時点で
+pid_controller.py が自動的に走行を開始する。
 
 waypointは緯度経度（WP,Latitude(deg),Longitude(deg),Ellipsoidal Height(m)）の
 CSVを使用する（デフォルト: wp_position.csv）。
@@ -94,13 +97,6 @@ def generate_launch_description():
         parameters=[{'wp_file': LaunchConfiguration('wp_file')}],
     )
 
-    mouse_trigger_node = Node(
-        package='cc02_autodrive',
-        executable='mouse_trigger_node',
-        name='mouse_trigger_node',
-        output='screen',
-    )
-
     vehicle_driver_node = Node(
         package='rc_car_driver',
         executable='vehicle_driver',
@@ -117,6 +113,5 @@ def generate_launch_description():
         rtcm_decoder_node,
         real_time_kinematic_node,
         pid_node,
-        mouse_trigger_node,
         vehicle_driver_node,
     ])

@@ -6,7 +6,6 @@ import rclpy #ROS2の機能をPythonで使うための超巨大な道具箱(rasp
 from rclpy.node import Node#道具箱（rclpy）の中から、特に重要な Node（ノード＝プログラムの本体になる部品） という道具をピンポイントで取り出している
 from ackermann_msgs.msg import AckermannDriveStamped  # 追加：自動運転の標準的な「手足」の命令メッセージ
 from gnss_ros_standardization.msg import GnssSolution  #GNSSデータのメッセージ
-from std_msgs.msg import Bool  #マウス左クリックの開始/停止トグル用
 
 # このプロジェクトで自動運転に使う十分な精度とみなすStatus
 _VALID_STATUSES = (GnssSolution.STATUS_FIX, GnssSolution.STATUS_FLOAT)
@@ -51,7 +50,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         if not self.wps_llh:
             self.get_logger().error(
                 f'Waypointを読み込めませんでした: {wp_file} '
-                '-- ファイルパスと形式（WP,Latitude(deg),Longitude(deg),Ellipsoidal Height(m)）を確認してください'
+                '-- ファイルパスと形式(WP,Latitude(deg),Longitude(deg),Ellipsoidal Height(m)）を確認してください'
             )
             raise SystemExit(1)
         #waypointファイルが読み込めた場合のログ出力
@@ -74,12 +73,11 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         #安全停止用
         #self.clock().now()は、ROS2のノードが持っている時計から現在の時間を取得するための関数。これを使って、最後にGNSSデータを受け取った時間を記録しておくことで、一定時間以上GNSSデータが更新されない場合に安全停止するための処理を実装する
         self.last_gnss_time = self.get_clock().now()
-        #マウス左クリックによる開始/停止トグル（mouse_trigger_node から制御）
+        #走行開始フラグ。RTK FIXに初めて到達した時点でTrueになる（手動トリガーなし）
         self.is_running = False
         #Publisher/Subscriber/Timer
         self.cmd_pub        = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)#self.create_publisher(送信するデータの「言語（型）」, 送信先のトピック名, キューサイズ)
         self.gnss_sub       = self.create_subscription(GnssSolution,'/gnss/solution',self._gnss_callback,10)#self.create_subscription(受信するデータの「言語（型）」, 受信するトピック名, 受信したときに呼び出す関数, キューサイズ)
-        self.start_stop_sub = self.create_subscription(Bool, '/mouse_start_stop', self._start_stop_callback, 10)
         #GNSSがgnss_timeout_s秒以上途絶えたら安全停止
         self.create_timer(0.1, self._safety_check)#self.create_timer(周期, 呼び出す関数)
         #このノードの起動が完了したことをログに出力する
@@ -103,21 +101,6 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             self.get_logger().error(f'Waypoint読み込みエラー: {e}')
             return []
         return waypoints
-
-    #マウス左クリックによる開始/停止トグル
-    def _start_stop_callback(self, msg: Bool):
-        if msg.data and not self.is_running:
-            # 開始時はPID内部状態をリセット（停止中の積分・微分の蓄積を引き継がない）
-            self.integral_error = 0.0
-            self.filtered_deriv = 0.0
-            self.prev_error = 0.0
-            self.prev_time = None
-            self.get_logger().info('▶️ 走行開始（マウス左クリック）')
-        elif not msg.data and self.is_running:
-            self.get_logger().info('⏸ 走行停止（マウス左クリック）')
-            self._publish_stop()
-
-        self.is_running = msg.data
 
     #GNSS原点確定とENU変換
     def _resolve_origin_and_convert(self, msg: GnssSolution) -> bool:
@@ -174,10 +157,18 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             f'Status={self.current_status}  speed={speed:.2f}m/s'
         )
 
-        # マウスで未開始（または停止中）の間は、ヘディング推定だけ続けて走行はしない
+        # RTK FIXに初めて到達した時点で自動的に走行を開始する（手動トリガーなし）
         if not self.is_running:
-            self._publish_stop()
-            return
+            if self.current_status == GnssSolution.STATUS_FIX:
+                self.is_running = True
+                self.integral_error = 0.0
+                self.filtered_deriv = 0.0
+                self.prev_error = 0.0
+                self.prev_time = None
+                self.get_logger().info('▶️ RTK FIXに到達 → 走行開始')
+            else:
+                self._publish_stop()
+                return
 
         # 全Waypoint完了チェック
         if self.waypoint_index >= len(self.waypoints):

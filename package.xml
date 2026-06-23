@@ -12,7 +12,6 @@
   <depend>ackermann_msgs</depend>
   <depend>std_msgs</depend>
   <depend>gnss_ros_standardization</depend>
-  <depend>python3-evdev</depend>
   <depend>python3-pymap3d</depend>
   <exec_depend>rc_car_driver</exec_depend>
   <exec_depend>launch</exec_depend>

@@ -37,25 +37,22 @@ ros2 run cc02_autodrive pid_node
 
 ## Architecture
 
-There are two node implementations in `cc02_autodrive/`, representing successive iterations of the same controller — both subscribe to GNSS position and publish Ackermann drive commands:
+`cc02_autodrive/pid_controller.py` (`PidController`) is the controller node (entry point `pid_node`). Key behaviors:
 
-- **`pid_controller.py`** (`PidController`) — earliest skeleton. Subscribes to `/gnss/solution` (`gnss_ros_standardization/msg/GnssSolution`), logs the received ENU position, and publishes a constant stop command (`speed=0`, `steering_angle=0`) to `/ackermann_cmd` on a 0.1s timer. No actual control logic — used to validate the GNSS→node wiring.
-
-- **`pid_controller_v2.py`** (`PidControllerV2`) — the real controller. Key behaviors:
-  - Loads a list of `(x, y)` ENU waypoints from a CSV file (`waypoint_file` param, columns `x,y`; see `waypoints_example.csv`).
-  - On each `GnssSolution` message (topic `/gnss/solution`):
-    - Ignores `status == 0` (invalid fix).
-    - Estimates heading from consecutive ENU positions (`atan2(dy, dx)`), only updating when movement exceeds 5cm to filter GNSS noise.
-    - Checks distance to current waypoint against `waypoint_radius`; advances `waypoint_index` and resets the PID integral/prev-error state on arrival.
-    - Runs a manual PID loop on heading error (target bearing to waypoint minus current heading, normalized to [-π, π]) to compute `steering_angle`, clamped to `max_steering_angle`.
-    - Selects speed based on GNSS fix quality: `speed_fix` when `status == 1` (RTK FIX), else `speed_float` (covers FLOAT/SPP/etc).
-  - A 0.5s timer (`_safety_check`) publishes a stop command if no GNSS message has been received for >0.5s.
-  - All tunables (waypoint file/radius, speeds, PID gains, max steering angle) are declared as ROS 2 parameters, overridable via `--ros-args -p key:=value`.
+- Loads a list of `(lat, lon, height)` waypoints from a CSV file (`wp_file` param; columns `WP,Latitude(deg),Longitude(deg),Ellipsoidal Height(m)`), converted to local ENU `(x, y)` once the GNSS ENU origin is resolved from the first valid fix.
+- On each `GnssSolution` message (topic `/gnss/solution`):
+  - Ignores statuses outside FIX/FLOAT (invalid/SPP/SBAS/DGPS etc.).
+  - Estimates heading from the velocity vector (`vel_enu`, course-over-ground via `atan2`), only trusting it above `min_speed_for_heading` to filter GNSS/Doppler noise.
+  - **Starts driving automatically the first time RTK FIX is observed** — no manual start trigger. Until then it holds neutral.
+  - Checks distance to the current waypoint against `wp_radius`; advances `waypoint_index` and resets the PID integral/derivative state on arrival.
+  - Runs a manual PID loop on heading error (target bearing to waypoint minus current heading, normalized to [-π, π]) to compute `steering_angle`, clamped to `max_steering_angle`.
+  - Selects speed based on GNSS fix quality: `speed_fix` when FIX, else `speed_float` (FLOAT).
+- A 0.1s timer (`_safety_check`) publishes a stop command if no GNSS message has been received for `gnss_timeout_s` seconds.
+- All tunables (waypoint file, radius, speeds, PID gains, max steering angle, timeouts) are declared as ROS 2 parameters, overridable via `--ros-args -p key:=value`.
 
 **GNSS status convention** (from `GnssSolution.status`, defined in `gnss_ros_standardization`): `0`=invalid, `1`=FIX, `2`=FLOAT, `5`=SPP (single point positioning).
 
 ## Known gotchas
 
-- `setup.py` only registers `pid_node` → `pid_controller:main` (the v1 stub) as a console script entry point. `pid_controller_v2:main` is **not** registered, so `ros2 run cc02_autodrive <name>` won't launch v2 until an entry point is added.
-- `waypoint_file` defaults to the relative path `'waypoints.csv'`, which resolves against the process's current working directory, not the package share directory. `waypoints_example.csv` is also not listed in `setup.py`'s `data_files`, so it isn't installed/discoverable via `ament_index`/share dir lookup — pass an absolute path via the ROS param when running.
+- `wp_file` defaults to the relative path `'wp_position.csv'`, which resolves against the process's current working directory, not the package share directory — pass an absolute path (or the `wp_file` launch argument) when running outside the launch file.
 - Depends on the `gnss_ros_standardization` package's custom message `GnssSolution`; that package must be built first in the same workspace.

@@ -32,8 +32,6 @@ setup(
     entry_points={
         'console_scripts': [
             'pid_node = cc02_autodrive.pid_controller:main',
-            'pid_node_v2 = cc02_autodrive.pid_controller_v2:main',
-            'mouse_trigger_node = cc02_autodrive.mouse_trigger_node:main',
         ],
     },
 )
