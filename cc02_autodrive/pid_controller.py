@@ -65,6 +65,7 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.current_y       = None# 現在地 ENU-Y [m]
         self.heading         = None# 進行方向 [rad]（東=0, 北=π/2）
         self.current_status  = 0   # GNSSステータス
+        self.fix_achieved    = False  # 起動後に一度でもFIXを取得したか（取得するまでは走行しない）
         #PID用
         self.integral_error = 0.0#積分誤差の初期化
         self.filtered_deriv = 0.0#微分誤差の初期化（ローパスフィルタ用）
@@ -134,6 +135,10 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
         self.current_status = msg.status
         self.last_gnss_time = self.get_clock().now()
 
+        if self.current_status == GnssSolution.STATUS_FIX and not self.fix_achieved:
+            self.fix_achieved = True
+            self.get_logger().info('★ 起動後初回のFIXを達成 → 走行を開始します')
+
         # ENU原点がまだ確定していなければ、このFixで確定を試みる。
         # 変換した直後の1回はcontrolに進まず、次のFixから走行を開始する。
         if self.waypoints is None:
@@ -164,6 +169,11 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             self._publish_stop()
             return
 
+        # 起動後、一度もFIXを取得していない間は走行しない（FLOATだけでは動かさない）
+        if not self.fix_achieved:
+            self._publish_stop()
+            return
+
         # 【Catch-22対策】ヘディング未確定時は停止せず、直進ブートストラップを行う。
         # ヘディングはvel_enu（速度ベクトル）からしか求められない（IMU非搭載のため）。
         # 停止し続けると速度が常に0になり、ヘディングが永久に確定しない。
@@ -189,10 +199,8 @@ class PidController(Node):#[PID制御のノード]という新しいクラスを
             self.prev_time = None
 
             if self.waypoint_index >= len(self.waypoints):
-                self.get_logger().info('★★★ 全Waypoint走破完了！ → 停止')
-                self.waypoint_index = len(self.waypoints) - 1
-                self._publish_stop()
-                return
+                self.get_logger().info('★★★ 1周完了！ 停止せずWP[1]から再周回します')
+                self.waypoint_index = 1
 
             tx, ty = self.waypoints[self.waypoint_index]
             self.get_logger().info(
