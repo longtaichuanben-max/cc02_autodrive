@@ -1,7 +1,6 @@
 import csv
 import os
 import time
-from datetime import datetime
 
 import rclpy
 from rclpy.node import Node
@@ -20,7 +19,7 @@ _STATUS_NAMES = {
 
 _CSV_HEADER = [
     'wall_time', 'ros_stamp_sec', 'gps_week', 'gps_tow',
-    'status', 'status_str', 'num_sats', 'ratio', 'hdop',
+    'status', 'status_str', 'num_sats',
     'latitude', 'longitude', 'altitude',
     'enu_x', 'enu_y', 'speed_mps',
 ]
@@ -30,8 +29,7 @@ class GnssLogger(Node):
     def __init__(self):
         super().__init__('gnss_logger')
 
-        default_log_name = f'gnss_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
-        self.declare_parameter('log_file', default_log_name)
+        self.declare_parameter('log_file', 'gnss_log_latest.csv')
         log_file = self.get_parameter('log_file').value
 
         log_dir = os.path.dirname(log_file)
@@ -62,8 +60,6 @@ class GnssLogger(Node):
             msg.status,
             _STATUS_NAMES.get(msg.status, f'UNKNOWN({msg.status})'),
             msg.num_sats,
-            f'{msg.ratio:.2f}',
-            f'{msg.hdop:.2f}',
             f'{msg.latitude:.8f}',
             f'{msg.longitude:.8f}',
             f'{msg.altitude:.3f}',
@@ -89,7 +85,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

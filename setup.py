@@ -14,7 +14,8 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, [
             'package.xml',
-            'cc02_autodrive/wp_position.csv',
+            'cc02_autodrive/wp_position_basic.csv',
+            'cc02_autodrive/wp_position_advance.csv',
         ]),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
@@ -35,7 +36,6 @@ setup(
             'stanley_node = cc02_autodrive.stanley_controller:main',
             'pure_pursuit_node = cc02_autodrive.pure_pursuit_controller:main',
             'gnss_logger_node = cc02_autodrive.gnss_logger:main',
-            'plot_log_map = cc02_autodrive.plot_log_map:main',
         ],
     },
 )

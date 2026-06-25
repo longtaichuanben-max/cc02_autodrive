@@ -3,7 +3,6 @@ import csv
 import os
 import numpy as np
 import pymap3d as pm
-from scipy.interpolate import splprep, splev
 import rclpy
 from rclpy.node import Node
 from ackermann_msgs.msg import AckermannDriveStamped
@@ -12,6 +11,25 @@ from gnss_ros_standardization.msg import GnssSolution
 # このプロジェクトで自動運転に使う十分な精度とみなすStatus
 _VALID_STATUSES = (GnssSolution.STATUS_FIX, GnssSolution.STATUS_FLOAT)
 
+# ログ表示用のstatus名（GnssSolution.msgのSTATUS_*定数に対応）
+_STATUS_NAMES = {
+    GnssSolution.STATUS_NONE:   'NONE/無効',
+    GnssSolution.STATUS_FIX:    'FIX',
+    GnssSolution.STATUS_FLOAT:  'FLOAT',
+    GnssSolution.STATUS_SBAS:   'SBAS',
+    GnssSolution.STATUS_DGPS:   'DGPS',
+    GnssSolution.STATUS_SINGLE: 'SINGLE',
+    GnssSolution.STATUS_PPP:    'PPP',
+    GnssSolution.STATUS_EKF:    'EKF',
+}
+
+
+def _format_status_info(status: int, pos_enu_cov) -> str:
+    name = _STATUS_NAMES.get(status, f'unknown({status})')
+    h_var = pos_enu_cov[0] if len(pos_enu_cov) > 0 else 0.0
+    acc_str = f'{math.sqrt(h_var):.1f}m' if h_var > 0.0 else 'n/a'
+    return f'status={status}({name}) 水平精度(目安)≈{acc_str}'
+
 
 class StanleyController(Node):
     def __init__(self):
@@ -19,8 +37,8 @@ class StanleyController(Node):
         self.get_logger().info('Stanley Controller Node has been started!')
 
         # パラメータの宣言
-        self.declare_parameter('wp_file', 'wp_position.csv')
-        self.declare_parameter('path_spacing', 0.05)            # m: スプライン再サンプリング間隔（数センチ刻み）
+        self.declare_parameter('wp_file', 'wp_position_basic.csv')
+        self.declare_parameter('wp_radius', 1.0)                # m: この距離以内でWP到達とみなす
         self.declare_parameter('speed_fix',   0.8)              # m/s: RTK-FIX時の速度
         self.declare_parameter('speed_float', 0.3)              # m/s: RTK-FLOAT時の速度
         self.declare_parameter('stanley_k',  0.8)               # 横偏差ゲイン（大きいほど経路に強く戻る）
@@ -30,11 +48,9 @@ class StanleyController(Node):
         self.declare_parameter('min_speed_for_heading', 0.1)    # m/s: この速度以上でvel_enuのヘディングを信頼する
         self.declare_parameter('max_speed_mps', 2.0)            # m/s: 速度の安全上限（誤設定時の暴走防止）
         self.declare_parameter('gnss_timeout_s', 2.0)           # 秒: 基準局RTCM補正が1Hzのため、0.5秒で毎周期引っかかる
-        self.declare_parameter('goal_tolerance', 0.3)           # m: 経路終端のこの距離以内で1周完了とみなし、WP[1]から再周回する
-        self.declare_parameter('search_window', 200)            # 最近傍点の前方探索窓（点数）。経路の後戻り防止
 
         wp_file                    = self.get_parameter('wp_file').value
-        self.path_spacing          = self.get_parameter('path_spacing').value
+        self.waypoint_radius       = self.get_parameter('wp_radius').value
         self.speed_fix             = self.get_parameter('speed_fix').value
         self.speed_float           = self.get_parameter('speed_float').value
         self.stanley_k             = self.get_parameter('stanley_k').value
@@ -44,8 +60,6 @@ class StanleyController(Node):
         self.min_speed_for_heading = self.get_parameter('min_speed_for_heading').value
         self.max_speed             = self.get_parameter('max_speed_mps').value
         self.gnss_timeout_s        = self.get_parameter('gnss_timeout_s').value
-        self.goal_tolerance        = self.get_parameter('goal_tolerance').value
-        self.search_window         = int(self.get_parameter('search_window').value)
 
         # waypointファイルの読み込み
         self.wps_llh = self._load_waypoints_llh(wp_file)
@@ -57,25 +71,22 @@ class StanleyController(Node):
             raise SystemExit(1)
         self.get_logger().info(f'Waypoint {len(self.wps_llh)}点 読み込み完了: {wp_file}')
 
-        # スプライン化したENU経路（原点確定後にセットされる）
-        self.path_xy       = None  # 滑らかなカーブ上の点 (M, 2) numpy配列
-        self.path_heading  = None  # 各点での接線方位 (M,) numpy配列 [rad]
-        self.wp_path_idx   = None  # 元の各Waypointに最も近い経路点のindex（通過判定用）
-        self.origin_ecef   = None  # GNSS ENU原点（ECEF）。最初の有効Fixで一度だけ確定
-
-        self.nearest_idx     = 0   # 現在の最近傍経路点index（前方探索の起点）。経路終端で0に戻り無限周回する
-        self.next_wp_announce = 0  # 次に通過announceする元Waypointのindex
+        self.waypoints = None  # ENU変換後の(x, y)リスト（直線で接続）。原点確定後にセットされる
+        self.waypoint_index = 0
+        self.segment_start = None    # 現在追従中の経路（線分）の開始点 (x, y)。直前WP到達時に更新される
+        self.origin_ecef = None      # GNSS ENU原点（ECEF）。最初の有効Fixで一度だけ確定
 
         # 状態変数の初期化
         self.current_x      = None  # 現在地 ENU-X [m]
         self.current_y      = None  # 現在地 ENU-Y [m]
         self.current_speed  = 0.0   # 現在の車速 [m/s]（vel_enu由来）
         self.heading        = None  # 進行方向 [rad]（東=0, 北=π/2）
-        self.current_status = 0     # GNSSステータス
+        self.current_status = 0     # GNSSステータス（FIX/FLOAT以外も含め、受信した最新の値）
         self.fix_achieved   = False  # 起動後に一度でもFIXを取得したか（取得するまでは走行しない）
 
         # 安全停止用
         self.last_gnss_time = self.get_clock().now()
+        self.last_pos_enu_cov = [0.0] * 9  # ログ表示用（直近メッセージのpos_enu_cov）
 
         # Publisher/Subscriber/Timer
         self.cmd_pub  = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)
@@ -104,50 +115,7 @@ class StanleyController(Node):
             return []
         return waypoints
 
-    # 元の疎なWaypoint(ENU)をスプラインで数センチ刻みの滑らかなカーブに変換する
-    def _build_spline_path(self, enu_waypoints: list):
-        pts = np.array(enu_waypoints, dtype=float)
-
-        # splprepは連続重複点でエラーになるため除去する
-        keep = np.ones(len(pts), dtype=bool)
-        keep[1:] = np.any(np.diff(pts, axis=0) != 0.0, axis=1)
-        pts = pts[keep]
-
-        n = len(pts)
-        if n < 2:
-            raise ValueError('スプライン生成には2点以上のユニークなWaypointが必要です')
-
-        # 点数に応じてスプライン次数を決める（cubicは4点以上必要）
-        k = min(3, n - 1)
-        tck, _u = splprep([pts[:, 0], pts[:, 1]], s=0, k=k)
-
-        # 一旦細かくサンプリングして全長(弧長)を求める
-        uu = np.linspace(0.0, 1.0, 4000)
-        sx, sy = splev(uu, tck)
-        seg = np.hypot(np.diff(sx), np.diff(sy))
-        cumlen = np.concatenate([[0.0], np.cumsum(seg)])
-        total_len = float(cumlen[-1])
-
-        # 弧長基準で path_spacing 間隔に再サンプリング
-        n_samples = max(2, int(round(total_len / self.path_spacing)) + 1)
-        target = np.linspace(0.0, total_len, n_samples)
-        u_arc = np.interp(target, cumlen, uu)
-
-        px, py = splev(u_arc, tck)
-        dx, dy = splev(u_arc, tck, der=1)        # 接線ベクトル → 経路方位
-        headings = np.arctan2(dy, dx)
-
-        path_xy = np.column_stack([px, py])
-
-        # 元の各Waypointに最も近い経路点index（通過announce用）
-        wp_path_idx = []
-        for wx, wy in enu_waypoints:
-            d2 = (path_xy[:, 0] - wx) ** 2 + (path_xy[:, 1] - wy) ** 2
-            wp_path_idx.append(int(np.argmin(d2)))
-
-        return path_xy, headings, wp_path_idx, total_len, n_samples
-
-    # GNSS原点確定とENU変換 + スプライン経路生成
+    # GNSS原点確定とENU変換（スプラインは使わず、Waypoint間は直線で接続する）
     def _resolve_origin_and_convert(self, msg: GnssSolution) -> bool:
         ox = msg.pos_enu_org_ecef.x
         oy = msg.pos_enu_org_ecef.y
@@ -161,40 +129,30 @@ class StanleyController(Node):
         origin_lat, origin_lon, origin_alt = pm.ecef2geodetic(ox, oy, oz)
 
         # pymap3dはベクトル入力に対応しているため、Waypointごとのforループは不要
-        # （18点程度ではこの行数削減自体が主な利点で、速度差は誤差程度）
         llh_arr = np.array(self.wps_llh)
         e, n, _u = pm.geodetic2enu(
             llh_arr[:, 0], llh_arr[:, 1], llh_arr[:, 2],
             origin_lat, origin_lon, origin_alt
         )
-        enu_waypoints = np.column_stack([e, n])
-
-        try:
-            path_xy, headings, wp_path_idx, total_len, n_samples = \
-                self._build_spline_path(enu_waypoints)
-        except Exception as exc:
-            self.get_logger().error(f'スプライン経路の生成に失敗しました: {exc}')
-            raise SystemExit(1)
-
-        self.path_xy      = path_xy
-        self.path_heading = headings
-        self.wp_path_idx  = wp_path_idx
+        self.waypoints = np.column_stack([e, n])
 
         self.get_logger().info(
-            f'GNSS ENU原点確定 → Waypoint {len(enu_waypoints)}点を'
-            f'スプライン化（全長={total_len:.1f}m, {n_samples}点 / {self.path_spacing*100:.0f}cm刻み）。'
-            f'最初の目標 → X={path_xy[0,0]:.2f}m, Y={path_xy[0,1]:.2f}m'
+            f'GNSS ENU原点確定 → Waypoint {len(self.waypoints)}点を変換完了（直線区間で接続）。'
+            f'最初の目標 → X={self.waypoints[0,0]:.2f}m, Y={self.waypoints[0,1]:.2f}m'
         )
         return True
 
     # GNSSコールバック
     def _gnss_callback(self, msg: GnssSolution):
+        # メッセージは受信できている前提で、status/精度はFIX/FLOAT判定の前に必ず更新する
+        # （_safety_checkでの「受信なし」と「精度不足」を区別するため）
+        self.current_status = msg.status
+        self.last_gnss_time = self.get_clock().now()
+        self.last_pos_enu_cov = msg.pos_enu_cov
+
         # FIX/FLOAT以外（無効・SPP・SBAS・DGPS等）は精度不足として無視する
         if msg.status not in _VALID_STATUSES:
             return
-
-        self.current_status = msg.status
-        self.last_gnss_time = self.get_clock().now()
 
         if self.current_status == GnssSolution.STATUS_FIX and not self.fix_achieved:
             self.fix_achieved = True
@@ -202,7 +160,7 @@ class StanleyController(Node):
 
         # ENU原点がまだ確定していなければ、このFixで確定を試みる。
         # 変換した直後の1回はcontrolに進まず、次のFixから走行を開始する。
-        if self.path_xy is None:
+        if self.waypoints is None:
             self._resolve_origin_and_convert(msg)
             return
 
@@ -223,17 +181,7 @@ class StanleyController(Node):
 
         self._control()
 
-    # 車両に最も近いスプライン経路点のindexを前方探索で求める
-    def _find_nearest_index(self) -> int:
-        start = self.nearest_idx
-        end = min(start + self.search_window, len(self.path_xy))
-        seg = self.path_xy[start:end]
-        d2 = (seg[:, 0] - self.current_x) ** 2 + (seg[:, 1] - self.current_y) ** 2
-        idx = start + int(np.argmin(d2))
-        self.nearest_idx = idx
-        return idx
-
-    # Stanley制御（スプライン経路追従）
+    # Stanley制御（Waypoint間は直線で接続）
     def _control(self):
         if self.current_x is None:
             self._publish_stop()
@@ -251,40 +199,44 @@ class StanleyController(Node):
             self.get_logger().info('ヘディング未確定 → 直進ブートストラップ中...')
             return
 
-        # 滑らかなカーブ上で車両に最も近い点を探す
-        idx = self._find_nearest_index()
-        px, py = self.path_xy[idx]
-        path_heading = float(self.path_heading[idx])
+        # 現在追従している経路（線分）の開始点。最初は現在地から開始する。
+        if self.segment_start is None:
+            self.segment_start = (self.current_x, self.current_y)
 
-        # 元のWaypointを通過したらannounce（経路index通過ベースなのでGNSSノイズに強い）
-        while (self.next_wp_announce < len(self.wp_path_idx)
-               and idx >= self.wp_path_idx[self.next_wp_announce]):
-            self.get_logger().info(f'★ WP[{self.next_wp_announce}] 通過！')
-            self.next_wp_announce += 1
+        tx, ty = self.waypoints[self.waypoint_index]
 
-        # 経路終端（出発点）付近に到達したら、停止せずWP[1]から再周回する
-        dist_to_goal = math.hypot(
-            self.path_xy[-1, 0] - self.current_x,
-            self.path_xy[-1, 1] - self.current_y
-        )
-        if idx >= len(self.path_xy) - 1 and dist_to_goal <= self.goal_tolerance:
+        # Waypoint到達判定（wp_radius以内に入ったら次のWPへ）
+        dist_to_wp = math.hypot(tx - self.current_x, ty - self.current_y)
+        if dist_to_wp <= self.waypoint_radius:
             self.get_logger().info(
-                f'★★★ 1周完了！ 停止せずWP[1]から再周回します（残り{dist_to_goal:.2f}m）'
+                f'★ WP[{self.waypoint_index}] 通過！ (到達距離={dist_to_wp:.2f}m)'
             )
-            self.nearest_idx = 0
-            self.next_wp_announce = 1
-            idx = self._find_nearest_index()
-            px, py = self.path_xy[idx]
-            path_heading = float(self.path_heading[idx])
+            # 到達したWPが次の経路区間の開始点になる
+            self.segment_start = (tx, ty)
+            self.waypoint_index += 1
 
-        # 方位誤差（経路接線方位 - 現在の進行方向、-π〜πに正規化）
+            if self.waypoint_index >= len(self.waypoints):
+                self.get_logger().info('★★★ 1周完了！ 停止せずWP[1]から再周回します')
+                self.waypoint_index = 1
+
+            tx, ty = self.waypoints[self.waypoint_index]
+            self.get_logger().info(
+                f'次の目標 → WP[{self.waypoint_index}] X={tx:.2f}m, Y={ty:.2f}m'
+            )
+
+        sx, sy = self.segment_start
+
+        # 経路方位（区間開始点 → 目標Waypoint の角度）
+        path_heading = math.atan2(ty - sy, tx - sx)
+
+        # 方位誤差（経路方位 - 現在の進行方向、-π〜πに正規化）
         heading_error = path_heading - self.heading
         heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
 
         # 横偏差（経路からの符号付き垂直距離）。正なら経路の右側にいることを意味する。
         cross_track_error = (
-            math.sin(path_heading) * (self.current_x - px)
-            - math.cos(path_heading) * (self.current_y - py)
+            math.sin(path_heading) * (self.current_x - sx)
+            - math.cos(path_heading) * (self.current_y - sy)
         )
 
         # Stanley則: δ = heading_error + atan2(k * 横偏差, k_soft + 速度)
@@ -302,7 +254,7 @@ class StanleyController(Node):
         self._publish_command(speed, steer)
 
         self.get_logger().debug(
-            f'path[{idx}/{len(self.path_xy)-1}] '
+            f'WP[{self.waypoint_index}] '
             f'方位誤差={math.degrees(heading_error):+.1f}°  '
             f'横偏差={cross_track_error:+.2f}m  '
             f'ステア={math.degrees(steer):+.1f}°  '
@@ -314,7 +266,16 @@ class StanleyController(Node):
     def _safety_check(self):
         elapsed = (self.get_clock().now() - self.last_gnss_time).nanoseconds / 1e9
         if elapsed > self.gnss_timeout_s:
-            self.get_logger().warn(f'GNSSデータが{elapsed:.1f}秒途絶えています → 安全停止')
+            # last_gnss_timeは受信したメッセージのstatusを問わず更新されるため、
+            # ここに来るのは本当にメッセージそのものが届いていない場合のみ
+            self.get_logger().warn(f'GNSSデータ受信なし（{elapsed:.1f}秒）→ 安全停止')
+            self._publish_stop()
+        elif self.current_status not in _VALID_STATUSES:
+            self.get_logger().warn(
+                f'走行に必要な精度(FIX/FLOAT)に未到達: '
+                f'{_format_status_info(self.current_status, self.last_pos_enu_cov)} → 待機中',
+                throttle_duration_sec=1.0,
+            )
             self._publish_stop()
 
     # コマンド送信
@@ -331,9 +292,14 @@ class StanleyController(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = StanleyController()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

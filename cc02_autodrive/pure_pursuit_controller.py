@@ -11,6 +11,25 @@ from gnss_ros_standardization.msg import GnssSolution
 # このプロジェクトで自動運転に使う十分な精度とみなすStatus
 _VALID_STATUSES = (GnssSolution.STATUS_FIX, GnssSolution.STATUS_FLOAT)
 
+# ログ表示用のstatus名（GnssSolution.msgのSTATUS_*定数に対応）
+_STATUS_NAMES = {
+    GnssSolution.STATUS_NONE:   'NONE/無効',
+    GnssSolution.STATUS_FIX:    'FIX',
+    GnssSolution.STATUS_FLOAT:  'FLOAT',
+    GnssSolution.STATUS_SBAS:   'SBAS',
+    GnssSolution.STATUS_DGPS:   'DGPS',
+    GnssSolution.STATUS_SINGLE: 'SINGLE',
+    GnssSolution.STATUS_PPP:    'PPP',
+    GnssSolution.STATUS_EKF:    'EKF',
+}
+
+
+def _format_status_info(status: int, pos_enu_cov) -> str:
+    name = _STATUS_NAMES.get(status, f'unknown({status})')
+    h_var = pos_enu_cov[0] if len(pos_enu_cov) > 0 else 0.0
+    acc_str = f'{math.sqrt(h_var):.1f}m' if h_var > 0.0 else 'n/a'
+    return f'status={status}({name}) 水平精度(目安)≈{acc_str}'
+
 
 class PurePursuitController(Node):
     def __init__(self):
@@ -18,10 +37,10 @@ class PurePursuitController(Node):
         self.get_logger().info('Pure Pursuit Controller Node has been started!')
 
         # パラメータの宣言
-        self.declare_parameter('wp_file', 'wp_position.csv')
-        self.declare_parameter('wp_radius', 1.0)                # m: この距離以内でWP到達とみなす
-        self.declare_parameter('speed_fix',   0.8)              # m/s: RTK-FIX時の速度
-        self.declare_parameter('speed_float', 0.4)              # m/s: RTK-FLOAT時の速度
+        self.declare_parameter('wp_file', 'wp_position_basic.csv')
+        self.declare_parameter('wp_radius', 2.0)                # m: この距離以内でWP到達とみなす
+        self.declare_parameter('speed_fix',   0.1)              # m/s: RTK-FIX時の速度
+        self.declare_parameter('speed_float', 0.05)              # m/s: RTK-FLOAT時の速度
         self.declare_parameter('wheelbase_m', 0.267)            # m: シャーシの前輪軸-後輪軸間の距離（実測値267mm）
         self.declare_parameter('lookahead_min', 0.8)            # m: 最低ルックアヘッド距離（低速時）
         self.declare_parameter('lookahead_gain', 0.5)           # s: ルックアヘッド距離の速度依存ゲイン（Ld = min + gain * speed）
@@ -63,11 +82,12 @@ class PurePursuitController(Node):
         self.current_y      = None  # 現在地 ENU-Y [m]
         self.current_speed  = 0.0   # 現在の車速 [m/s]（vel_enu由来）
         self.heading        = None  # 進行方向 [rad]（東=0, 北=π/2）
-        self.current_status = 0     # GNSSステータス
+        self.current_status = 0     # GNSSステータス（FIX/FLOAT以外も含め、受信した最新の値）
         self.fix_achieved   = False  # 起動後に一度でもFIXを取得したか（取得するまでは走行しない）
 
         # 安全停止用
         self.last_gnss_time = self.get_clock().now()
+        self.last_pos_enu_cov = [0.0] * 9  # ログ表示用（直近メッセージのpos_enu_cov）
 
         # Publisher/Subscriber/Timer
         self.cmd_pub  = self.create_publisher(AckermannDriveStamped, '/ackermann_cmd', 10)
@@ -125,12 +145,15 @@ class PurePursuitController(Node):
 
     # GNSSコールバック
     def _gnss_callback(self, msg: GnssSolution):
+        # メッセージは受信できている前提で、status/精度はFIX/FLOAT判定の前に必ず更新する
+        # （_safety_checkでの「受信なし」と「精度不足」を区別するため）
+        self.current_status = msg.status
+        self.last_gnss_time = self.get_clock().now()
+        self.last_pos_enu_cov = msg.pos_enu_cov
+
         # FIX/FLOAT以外（無効・SPP・SBAS・DGPS等）は精度不足として無視する
         if msg.status not in _VALID_STATUSES:
             return
-
-        self.current_status = msg.status
-        self.last_gnss_time = self.get_clock().now()
 
         if self.current_status == GnssSolution.STATUS_FIX and not self.fix_achieved:
             self.fix_achieved = True
@@ -250,7 +273,16 @@ class PurePursuitController(Node):
     def _safety_check(self):
         elapsed = (self.get_clock().now() - self.last_gnss_time).nanoseconds / 1e9
         if elapsed > self.gnss_timeout_s:
-            self.get_logger().warn(f'GNSSデータが{elapsed:.1f}秒途絶えています → 安全停止')
+            # last_gnss_timeは受信したメッセージのstatusを問わず更新されるため、
+            # ここに来るのは本当にメッセージそのものが届いていない場合のみ
+            self.get_logger().warn(f'GNSSデータ受信なし（{elapsed:.1f}秒）→ 安全停止')
+            self._publish_stop()
+        elif self.current_status not in _VALID_STATUSES:
+            self.get_logger().warn(
+                f'走行に必要な精度(FIX/FLOAT)に未到達: '
+                f'{_format_status_info(self.current_status, self.last_pos_enu_cov)} → 待機中',
+                throttle_duration_sec=1.0,
+            )
             self._publish_stop()
 
     # コマンド送信
@@ -267,9 +299,14 @@ class PurePursuitController(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = PurePursuitController()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
