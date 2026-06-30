@@ -44,8 +44,10 @@ class StanleyController(Node):
         self.declare_parameter('stanley_k',  0.8)               # 横偏差ゲイン（大きいほど経路に強く戻る）
         self.declare_parameter('k_soft',     1.0)               # m/s: 低速時の分母ソフトニング定数
         self.declare_parameter('max_steering_angle', math.radians(25.0))  # rad: ステアリング最大角（rc_car_driverの実測値25°に合わせる）
-        self.declare_parameter('bootstrap_speed', 0.1)          # 方位を確定させるために、最初の数秒間はこの速度で走行する
+        self.declare_parameter('bootstrap_speed', 0.3)          # 方位を確定させるために、最初の数秒間はこの速度で走行する
         self.declare_parameter('min_speed_for_heading', 0.1)    # m/s: この速度以上でvel_enuのヘディングを信頼する
+        self.declare_parameter('heading_smoothing_w', 0.15)     # ヘディング推定のEMA平滑化係数(0-1)。大きいほど反応が速いがノイズが残る
+                                                                 # rate_hz: 10に変更(2026-06-29)したため0.3→0.15（同じ実時間あたりの平滑化強度を維持）
         self.declare_parameter('max_speed_mps', 2.0)            # m/s: 速度の安全上限（誤設定時の暴走防止）
         self.declare_parameter('gnss_timeout_s', 2.0)           # 秒: 基準局RTCM補正が1Hzのため、0.5秒で毎周期引っかかる
 
@@ -58,6 +60,7 @@ class StanleyController(Node):
         self.max_steer             = self.get_parameter('max_steering_angle').value
         self.bootstrap_speed       = self.get_parameter('bootstrap_speed').value
         self.min_speed_for_heading = self.get_parameter('min_speed_for_heading').value
+        self.heading_smoothing_w   = self.get_parameter('heading_smoothing_w').value
         self.max_speed             = self.get_parameter('max_speed_mps').value
         self.gnss_timeout_s        = self.get_parameter('gnss_timeout_s').value
 
@@ -80,9 +83,14 @@ class StanleyController(Node):
         self.current_x      = None  # 現在地 ENU-X [m]
         self.current_y      = None  # 現在地 ENU-Y [m]
         self.current_speed  = 0.0   # 現在の車速 [m/s]（vel_enu由来）
-        self.heading        = None  # 進行方向 [rad]（東=0, 北=π/2）
+        self.heading        = None  # 進行方向 [rad]（東=0, 北=π/2）。EMA平滑化後のve/vnから算出
+        self._ve_filtered   = 0.0   # ヘディングEMA平滑化用の内部状態（東方向速度）
+        self._vn_filtered   = 0.0   # ヘディングEMA平滑化用の内部状態（北方向速度）
         self.current_status = 0     # GNSSステータス（FIX/FLOAT以外も含め、受信した最新の値）
         self.fix_achieved   = False  # 起動後に一度でもFIXを取得したか（取得するまでは走行しない）
+
+        # 競技採点用（ロボットカーコンテスト2026: ゲート通過+10点、周回+50点）
+        self.score = 0
 
         # 安全停止用
         self.last_gnss_time = self.get_clock().now()
@@ -168,10 +176,19 @@ class StanleyController(Node):
         self.current_y = msg.pos_enu.y
 
         # ヘディング = 速度ベクトルのCourse over Ground（vel_enu由来）。
+        # GNSS速度ノイズの影響を抑えるため、角度ではなくve/vnベクトル成分にEMA平滑化を
+        # かけてからatan2で角度に変換する（角度を直接平均すると0°/360°の境界で破綻するため）。
         ve, vn = msg.vel_enu.x, msg.vel_enu.y
         self.current_speed = math.hypot(ve, vn)
         if self.current_speed >= self.min_speed_for_heading:
-            self.heading = math.atan2(vn, ve)
+            if self.heading is None:
+                # 初回はEMAの初期値が無いので測定値をそのまま使う
+                self._ve_filtered, self._vn_filtered = ve, vn
+            else:
+                w = self.heading_smoothing_w
+                self._ve_filtered = (1 - w) * self._ve_filtered + w * ve
+                self._vn_filtered = (1 - w) * self._vn_filtered + w * vn
+            self.heading = math.atan2(self._vn_filtered, self._ve_filtered)
 
         status_str = 'FIX' if self.current_status == GnssSolution.STATUS_FIX else 'FLOAT'
         self.get_logger().info(
@@ -208,15 +225,21 @@ class StanleyController(Node):
         # Waypoint到達判定（wp_radius以内に入ったら次のWPへ）
         dist_to_wp = math.hypot(tx - self.current_x, ty - self.current_y)
         if dist_to_wp <= self.waypoint_radius:
+            self.score += 10
             self.get_logger().info(
-                f'★ WP[{self.waypoint_index}] 通過！ (到達距離={dist_to_wp:.2f}m)'
+                f'★ WP[{self.waypoint_index}] 通過！ (到達距離={dist_to_wp:.2f}m) '
+                f'ゲート通過 +10点 → 合計{self.score}点'
             )
             # 到達したWPが次の経路区間の開始点になる
             self.segment_start = (tx, ty)
             self.waypoint_index += 1
 
             if self.waypoint_index >= len(self.waypoints):
-                self.get_logger().info('★★★ 1周完了！ 停止せずWP[1]から再周回します')
+                self.score += 50
+                self.get_logger().info(
+                    f'★★★ 1周完了！ 周回ボーナス +50点 → 合計{self.score}点 '
+                    f'停止せずWP[1]から再周回します'
+                )
                 self.waypoint_index = 1
 
             tx, ty = self.waypoints[self.waypoint_index]

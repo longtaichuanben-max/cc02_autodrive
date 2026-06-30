@@ -68,7 +68,7 @@ function plot_log_map(log_csv, wp_file)
 
     % Waypoint（直線で接続。スプラインは使わない — 実際の走行経路と同じ）
     if ~isempty(wp_file)
-        WP = readtable(wp_file);
+        WP = readtable(wp_file, 'VariableNamingRule', 'preserve');
         wp_lat = WP.("Latitude(deg)");
         wp_lon = WP.("Longitude(deg)");
 
