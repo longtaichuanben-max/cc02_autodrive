@@ -68,6 +68,11 @@ def generate_launch_description():
         default_value='pid',
         description="走行制御アルゴリズム: 'pid' / 'stanley' / 'pure_pursuit'"
     )
+    corner_wp_indices_arg = DeclareLaunchArgument(
+        'corner_wp_indices',
+        default_value='',
+        description='Pure Pursuit: 減速するWPインデックスをカンマ区切りで指定（例: 1,3,5）'
+    )
 
     is_pid = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'pid'"])
     is_stanley = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'stanley'"])
@@ -96,7 +101,10 @@ def generate_launch_description():
         executable='pure_pursuit_node',
         name='pure_pursuit_controller',
         output='screen',
-        parameters=[{'wp_file': LaunchConfiguration('wp_file')}],
+        parameters=[{
+            'wp_file': LaunchConfiguration('wp_file'),
+            'corner_wp_indices': LaunchConfiguration('corner_wp_indices'),
+        }],
         condition=IfCondition(is_pure_pursuit),
     )
 
@@ -120,6 +128,7 @@ def generate_launch_description():
         wp_file_arg,
         log_file_arg,
         controller_arg,
+        corner_wp_indices_arg,
         pid_node,
         stanley_node,
         pure_pursuit_node,
