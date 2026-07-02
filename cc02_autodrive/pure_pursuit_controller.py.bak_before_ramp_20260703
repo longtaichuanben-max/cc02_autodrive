@@ -24,7 +24,7 @@ _STATUS_NAMES = {
 
 _TUNING_LOG_HEADER = [
     'time', 'enu_x', 'enu_y', 'actual_speed',
-    'waypoint_index', 'dist_to_target', 'approaching_corner', 'ramp_active',
+    'waypoint_index', 'dist_to_target', 'approaching_corner',
     'cross_track_error', 'alpha_deg', 'steer_deg',
     'lookahead_dist', 'cmd_speed', 'seg_speed',
 ]
@@ -58,7 +58,7 @@ class PurePursuitController(Node):
         # speed_min: 短いセグメント（≤ speed_dist_short）での目標速度 [m/s]
         #   コーナー減速のベース速度にもなる（corner_speed = seg_speed × ratio ≥ speed_min × ratio）
         #   上げると全体的に速くなるが、コーナー前の減速量が減り曲がり切れなくなるリスクあり
-        self.declare_parameter('speed_min', 2.0)
+        self.declare_parameter('speed_min', 1.5)
         # speed_max: 長いセグメント（≥ speed_dist_long）での目標速度 [m/s]
         #   上げると長い直線が速くなる。vehicle_driverが処理できる範囲内で設定すること
         #   実績: 2.5 m/s = 安定動作確認済み、3.0 m/s = ESC応答不良で停車した
@@ -70,7 +70,7 @@ class PurePursuitController(Node):
         #   コース最長セグメント（約12m）以下に設定しないと speed_max に到達しない
         #   例: 20.0m → 12mセグメントでも speed_max に届かない（実質 speed_min に近い速度しか出ない）
         #       10.0m → 10m以上のセグメントで speed_max に到達できる
-        self.declare_parameter('speed_dist_long', 10.0)
+        self.declare_parameter('speed_dist_long', 20.0)
 
         # ── Pure Pursuit ステアリング計算 ────────────────────────────────
         # wheelbase_m: 前後軸間距離 [m]（車体実測値・変更不要）
@@ -93,7 +93,7 @@ class PurePursuitController(Node):
         # bootstrap_speed: ヘディング（進行方向）確定前の直進速度 [m/s]
         #   起動直後にGNSSの速度ベクトルが安定するまでこの速度で直進する
         #   小さすぎると方向確定に時間がかかる。大きすぎると確定前に遠くまで行ってしまう
-        self.declare_parameter('bootstrap_speed', 0.5)
+        self.declare_parameter('bootstrap_speed', 0.3)
         # min_speed_for_heading: ヘディング推定に使う最低GNSS速度 [m/s]
         #   この速度以上のGNSSドップラー速度ベクトルのみヘディング計算に使う（ノイズ除去）
         self.declare_parameter('min_speed_for_heading', 0.05)
@@ -117,13 +117,12 @@ class PurePursuitController(Node):
         #   大きく(→1.0)するほどコーナー速度が高くなり速いが曲がり切れないリスクあり
         #   小さく(→0.0)するほど大きく減速するが停車リスク（speed_min × ratio が物理最低速度を下回ると停車）
         #   停車させないための条件: speed_min × corner_slowdown_ratio ≥ 物理最低速度(≈1.4 m/s)
-        self.declare_parameter('corner_slowdown_ratio', 0.85)
-        # corner_slowdown_base_dist: コーナー減速開始距離の基準値 [m]、および全WP通過時の速度遷移ランプ距離の基準値
-        #   コーナー減速開始距離 = corner_slowdown_base_dist × (seg_speed / speed_min)
-        #   コーナー出口ランプ距離 = 同上（corner_speed → 次seg_speed）
-        #   非コーナーWP遷移ランプ距離 = corner_slowdown_base_dist × |Δv| / (speed_max - speed_min)
-        #   → 非コーナーWPでもセグメント間の速度差を滑らかにつなぐ（ESCへの急変を防ぐ）
-        #   大きくすると全体的に緩やかな速度変化、小さくすると素早く目標速度に到達
+        self.declare_parameter('corner_slowdown_ratio', 0.5)
+        # corner_slowdown_base_dist: speed_min で走行中のセグメントからコーナーに入る際の減速開始距離 [m]
+        #   実際の減速開始距離 = corner_slowdown_base_dist × (seg_speed / speed_min)
+        #   → 速いセグメントほど遠くから減速を開始する（速度に比例してスケール）
+        #   大きくすると早めに減速 → 安定するがセグメントの大部分が減速ゾーンになる
+        #   小さくすると直前まで速度を維持 → 速いが曲がり切れないリスクあり
         self.declare_parameter('corner_slowdown_base_dist', 5.0)
         default_log = os.path.join(
             os.path.expanduser('~'), 'ros2_ws', 'gnss_logs', 'pure_pursuit_log_latest.csv'
@@ -200,14 +199,10 @@ class PurePursuitController(Node):
         self.current_status = 0
         self.fix_achieved   = False
 
-        # 速度遷移ランプ用（コーナー出口・非コーナーWP通過共通）
-        # コーナーWP通過: corner_speed → 次seg_speed へランプ
-        # 非コーナーWP通過: 前回cmd_speed → 次seg_speed へランプ（段差をESCに優しく解消）
-        self._speed_ramp_remaining = 0.0   # ランプ残り距離 [m]
-        self._speed_ramp_total     = 1.0   # ランプ全体距離（ゼロ除算防止初期値）
-        self._speed_ramp_from      = 0.0   # ランプ開始速度 [m/s]
-        self._speed_ramp_to        = 0.0   # ランプ目標速度 [m/s]
-        self._last_cmd_speed       = 0.0   # 前回の指令速度（非コーナーWP遷移の始点計算用）
+        # コーナー出口ランプ用
+        self._corner_exit_dist_remaining = 0.0
+        self._corner_exit_total_dist     = 1.0   # ゼロ除算防止初期値
+        self._corner_exit_start_speed    = 0.0
         self._last_ctrl_x = None
         self._last_ctrl_y = None
 
@@ -422,12 +417,14 @@ class PurePursuitController(Node):
             self.get_logger().info('ヘディング未確定 → 直進ブートストラップ中...')
             return
 
-        # 走行距離で速度遷移ランプ残距離を消費
-        if self._last_ctrl_x is not None and self._speed_ramp_remaining > 0:
+        # 走行距離でコーナー出口ランプ残距離を消費
+        if self._last_ctrl_x is not None and self._corner_exit_dist_remaining > 0:
             dist_moved = math.hypot(
                 self.current_x - self._last_ctrl_x, self.current_y - self._last_ctrl_y
             )
-            self._speed_ramp_remaining = max(0.0, self._speed_ramp_remaining - dist_moved)
+            self._corner_exit_dist_remaining = max(
+                0.0, self._corner_exit_dist_remaining - dist_moved
+            )
         self._last_ctrl_x = self.current_x
         self._last_ctrl_y = self.current_y
 
@@ -460,33 +457,16 @@ class PurePursuitController(Node):
                 )
                 self.waypoint_index = 1
 
-            # WP通過後の速度遷移ランプを設定
-            # コーナーWP: corner_speed（到達時速度）→ 次seg_speed へランプ
-            # 非コーナーWP: 前回cmd_speed → 次seg_speed へランプ（段差解消）
-            next_seg_speed, _ = self._seg_params()   # waypoint_index 更新後
             if passed_idx in self._corner_wp_set:
-                ramp_from = corner_speed
-                ramp_dist = corner_dist
+                # 出口ランプ: 接近セグメント速度から次セグメント速度へランプ
+                next_seg_speed, _ = self._seg_params()   # waypoint_index 更新後
+                self._corner_exit_total_dist     = corner_dist
+                self._corner_exit_dist_remaining = corner_dist
+                self._corner_exit_start_speed    = corner_speed
                 self.get_logger().info(
-                    f'コーナーWP[{passed_idx}]通過 → 出口ランプ {ramp_dist:.1f}m '
-                    f'({ramp_from:.2f}→{next_seg_speed:.2f}m/s)'
+                    f'コーナーWP[{passed_idx}]通過 → 出口ランプ {corner_dist:.1f}m '
+                    f'({corner_speed:.2f}→{next_seg_speed:.2f}m/s)'
                 )
-            else:
-                ramp_from = self._last_cmd_speed
-                max_delta = max(self.speed_max - self.speed_min, 1e-3)
-                ramp_dist = self.corner_slowdown_base_dist * abs(next_seg_speed - ramp_from) / max_delta
-                if ramp_dist > 0.01:
-                    self.get_logger().info(
-                        f'WP[{passed_idx}]通過 → 遷移ランプ {ramp_dist:.1f}m '
-                        f'({ramp_from:.2f}→{next_seg_speed:.2f}m/s)'
-                    )
-            if ramp_dist > 0.01 and abs(next_seg_speed - ramp_from) > 0.01:
-                self._speed_ramp_from      = ramp_from
-                self._speed_ramp_to        = next_seg_speed
-                self._speed_ramp_total     = ramp_dist
-                self._speed_ramp_remaining = ramp_dist
-            else:
-                self._speed_ramp_remaining = 0.0
 
             tx0, ty0 = self.waypoints[self.waypoint_index]
             self.get_logger().info(
@@ -518,11 +498,13 @@ class PurePursuitController(Node):
             # cmd_speed を seg_speed → corner_speed へ線形に下げる（手前ほど速く、直前で最低速）
             ratio     = max(0.0, min(1.0, dist_to_target / corner_dist))
             cmd_speed = corner_speed + ratio * (seg_speed - corner_speed)
-        elif self._speed_ramp_remaining > 0:
-            # 速度遷移ランプ中（コーナー出口 or 非コーナーWP通過後）
-            # _speed_ramp_from → _speed_ramp_to へ走行距離に応じて線形補間
-            ratio     = max(0.0, min(1.0, self._speed_ramp_remaining / self._speed_ramp_total))
-            cmd_speed = self._speed_ramp_to + ratio * (self._speed_ramp_from - self._speed_ramp_to)
+        elif self._corner_exit_dist_remaining > 0:
+            # コーナー通過直後の加速ランプ: corner_speed から次セグメントの seg_speed へ線形に上げる
+            # _corner_exit_dist_remaining が corner_dist→0 に減るにつれ加速する
+            # corner_slowdown_base_dist を小さくするとこのランプも短くなり素早く加速する
+            ratio     = max(0.0, min(1.0,
+                           self._corner_exit_dist_remaining / self._corner_exit_total_dist))
+            cmd_speed = self._corner_exit_start_speed + (1.0 - ratio) * (seg_speed - self._corner_exit_start_speed)
         else:
             # 通常走行: セグメント目標速度をそのまま指令
             cmd_speed = seg_speed
@@ -556,7 +538,6 @@ class PurePursuitController(Node):
         steer = max(-self.max_steer, min(self.max_steer, steer))
 
         self._publish_command(cmd_speed, steer)
-        self._last_cmd_speed = cmd_speed   # 次WP通過時の遷移ランプ始点として使用
 
         alpha_deg = math.degrees(alpha)
         steer_deg = math.degrees(steer)
@@ -568,7 +549,6 @@ class PurePursuitController(Node):
             f'{self.waypoint_index}',
             f'{dist_to_target:.3f}',
             f'{1 if approaching_corner else 0}',
-            f'{1 if self._speed_ramp_remaining > 0 else 0}',
             f'{cross_track_error:.3f}',
             f'{alpha_deg:.2f}',
             f'{steer_deg:.2f}',
