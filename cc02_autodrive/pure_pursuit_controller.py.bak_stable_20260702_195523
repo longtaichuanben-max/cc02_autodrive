@@ -23,9 +23,7 @@ _STATUS_NAMES = {
 }
 
 _TUNING_LOG_HEADER = [
-    'time', 'enu_x', 'enu_y', 'actual_speed',
-    'waypoint_index', 'dist_to_target', 'approaching_corner',
-    'cross_track_error', 'alpha_deg', 'steer_deg',
+    'time', 'cross_track_error', 'alpha_deg', 'steer_deg',
     'lookahead_dist', 'cmd_speed', 'seg_speed',
 ]
 
@@ -43,87 +41,25 @@ class PurePursuitController(Node):
         self.get_logger().info('Pure Pursuit Controller Node has been started!')
 
         self.declare_parameter('wp_file', 'wp_position_basic.csv')
-
-        # ── WP到達判定半径 ────────────────────────────────────────────────
-        # wp_radius: 全WP共通のデフォルト到達判定半径 [m]
-        #   大きくすると手前で通過判定 → コーナーで曲がり始めるタイミングが早くなる
-        #   小さくすると厳密にWP中心付近を通過しないと認識されない → 高速時に通過しそびれるリスクあり
-        self.declare_parameter('wp_radius', 0.7)
-        # wp_radii: WPごとに半径を個別指定（skip前0-based インデックス: 半径, ...）
-        #   例: '3:1.0,5:1.2,7:2.0' → WP[3]=1.0m, WP[5]=1.2m, WP[7]=2.0m
-        #   カーブが緩いWPや直線上のWPは大きめにすることで高速通過しやすくなる
-        self.declare_parameter('wp_radii', '3:1.0,5:1.2,7:2.0')
-
-        # ── セグメント速度 ────────────────────────────────────────────────
-        # speed_min: 短いセグメント（≤ speed_dist_short）での目標速度 [m/s]
-        #   コーナー減速のベース速度にもなる（corner_speed = seg_speed × ratio ≥ speed_min × ratio）
-        #   上げると全体的に速くなるが、コーナー前の減速量が減り曲がり切れなくなるリスクあり
-        self.declare_parameter('speed_min', 1.5)
-        # speed_max: 長いセグメント（≥ speed_dist_long）での目標速度 [m/s]
-        #   上げると長い直線が速くなる。vehicle_driverが処理できる範囲内で設定すること
-        #   実績: 2.5 m/s = 安定動作確認済み、3.0 m/s = ESC応答不良で停車した
-        self.declare_parameter('speed_max', 2.5)
-        # speed_dist_short: これ以下のセグメント長は speed_min で走行 [m]
-        #   下げると短いセグメントでも速くなる。上げると長いセグメントでも速度を抑えられる
-        self.declare_parameter('speed_dist_short', 5.0)
-        # speed_dist_long: これ以上のセグメント長は speed_max で走行 [m]
-        #   コース最長セグメント（約12m）以下に設定しないと speed_max に到達しない
-        #   例: 20.0m → 12mセグメントでも speed_max に届かない（実質 speed_min に近い速度しか出ない）
-        #       10.0m → 10m以上のセグメントで speed_max に到達できる
-        self.declare_parameter('speed_dist_long', 20.0)
-
-        # ── Pure Pursuit ステアリング計算 ────────────────────────────────
-        # wheelbase_m: 前後軸間距離 [m]（車体実測値・変更不要）
-        #   ステアリング角 δ = atan2(2·L·sin(α), Ld) の L に使う
-        self.declare_parameter('wheelbase_m', 0.267)
-        # lookahead_min: ルックアヘッド距離の最小値 [m]
-        #   速度がゼロに近いときでもこの距離先を目標にする
-        #   小さくすると低速時に敏感なステア → 蛇行しやすい
-        self.declare_parameter('lookahead_min', 1.0)
-        # lookahead_fraction: Ld = fraction × seg_len になるよう T_h を逆算する係数
-        #   Ld（ルックアヘッド距離）= lookahead_min + T_h × cmd_speed
-        #   大きくするとセグメント長に対してより遠くを見る → 滑らかだが反応が遅い
-        #   小さくするとセグメントに対して近くを見る → 敏感で曲がりやすいが蛇行リスクあり
-        #   目安: 0.3〜0.5（現在0.40 = セグメント長の40%先を見る）
-        self.declare_parameter('lookahead_fraction', 0.40)
-        # max_steering_angle: ステアリング最大角 [rad]（25度固定・変更不要）
+        self.declare_parameter('wp_radius', 0.7)          # m: WP到達判定のデフォルト半径
+        self.declare_parameter('wp_radii', '3:1.0,5:1.2,7:2.0')             # 個別半径 例:"1:0.5,4:1.2"（skip前0-based）
+        self.declare_parameter('speed_min', 1.5)           # m/s: セグメント最低速度
+        self.declare_parameter('speed_max', 2.5)           # m/s: セグメント最高速度
+        self.declare_parameter('speed_dist_short', 5.0)    # m: この距離以下でspeed_min
+        self.declare_parameter('speed_dist_long', 20.0)    # m: この距離以上でspeed_max
+        self.declare_parameter('wheelbase_m', 0.267)       # m: 前後軸間距離（実測値）
+        self.declare_parameter('lookahead_min', 1.0)       # m: ルックアヘッド最小距離
+        self.declare_parameter('lookahead_fraction', 0.40) # Ld目標 = fraction × seg_len
         self.declare_parameter('max_steering_angle', math.radians(25.0))
-
-        # ── 起動・安全系 ──────────────────────────────────────────────────
-        # bootstrap_speed: ヘディング（進行方向）確定前の直進速度 [m/s]
-        #   起動直後にGNSSの速度ベクトルが安定するまでこの速度で直進する
-        #   小さすぎると方向確定に時間がかかる。大きすぎると確定前に遠くまで行ってしまう
-        self.declare_parameter('bootstrap_speed', 0.3)
-        # min_speed_for_heading: ヘディング推定に使う最低GNSS速度 [m/s]
-        #   この速度以上のGNSSドップラー速度ベクトルのみヘディング計算に使う（ノイズ除去）
+        self.declare_parameter('bootstrap_speed', 0.3)     # m/s: ヘディング確定前の直進速度
         self.declare_parameter('min_speed_for_heading', 0.05)
-        # heading_smoothing_w: ヘディングのEMA（指数移動平均）係数
-        #   大きい(→1.0)ほど最新値を重視して即応、小さい(→0.0)ほど過去値を重視して滑らか
         self.declare_parameter('heading_smoothing_w', 0.35)
-        # max_speed_mps: 速度指令の絶対上限 [m/s]（安全フェールセーフ・通常変更不要）
-        self.declare_parameter('max_speed_mps', 4.0)
-        # gnss_timeout_s: この秒数GNSSを受信しなければ緊急停止 [s]
+        self.declare_parameter('max_speed_mps', 4.0)       # m/s: 安全上限
         self.declare_parameter('gnss_timeout_s', 2.0)
-
-        # ── コーナー制御 ──────────────────────────────────────────────────
-        # corner_wp_indices: 減速対象のWPインデックス（skip前0-based、カンマ区切り）
-        #   ここに指定したWPに近づくと減速し、通過後に加速ランプを行う
         self.declare_parameter('corner_wp_indices', '0,2,6,8')
-        # wp_skip_indices: コントローラが無視するWPインデックス（skip前0-based、カンマ区切り）
-        #   指定したWPを経路から除外する（空文字=スキップなし）
         self.declare_parameter('wp_skip_indices', '')
-        # corner_slowdown_ratio: コーナー通過速度 = seg_speed × ratio
-        #   0.5 → セグメント速度の50%まで減速
-        #   大きく(→1.0)するほどコーナー速度が高くなり速いが曲がり切れないリスクあり
-        #   小さく(→0.0)するほど大きく減速するが停車リスク（speed_min × ratio が物理最低速度を下回ると停車）
-        #   停車させないための条件: speed_min × corner_slowdown_ratio ≥ 物理最低速度(≈1.4 m/s)
-        self.declare_parameter('corner_slowdown_ratio', 0.5)
-        # corner_slowdown_base_dist: speed_min で走行中のセグメントからコーナーに入る際の減速開始距離 [m]
-        #   実際の減速開始距離 = corner_slowdown_base_dist × (seg_speed / speed_min)
-        #   → 速いセグメントほど遠くから減速を開始する（速度に比例してスケール）
-        #   大きくすると早めに減速 → 安定するがセグメントの大部分が減速ゾーンになる
-        #   小さくすると直前まで速度を維持 → 速いが曲がり切れないリスクあり
-        self.declare_parameter('corner_slowdown_base_dist', 5.0)
+        self.declare_parameter('corner_slowdown_ratio', 0.5)       # コーナー速度 = seg_speed × ratio
+        self.declare_parameter('corner_slowdown_base_dist', 5.0)   # m: speed_min時の減速開始距離
         default_log = os.path.join(
             os.path.expanduser('~'), 'ros2_ws', 'gnss_logs', 'pure_pursuit_log_latest.csv'
         )
@@ -259,14 +195,12 @@ class PurePursuitController(Node):
             e2, n2 = self.waypoints[i + 1]
             d = math.hypot(e2 - e1, n2 - n1)
 
-                # セグメント長 d を [speed_dist_short, speed_dist_long] の範囲で [speed_min, speed_max] に線形マップ
-            # d ≤ speed_dist_short → speed_min、d ≥ speed_dist_long → speed_max、中間は線形補間
+            # 速度: d を [d_short, d_long] → [speed_min, speed_max] に線形マップ
             t = (d - self.speed_dist_short) / d_range if d_range > 0 else 0.0
             seg_speed = self.speed_min + max(0.0, min(1.0, t)) * (self.speed_max - self.speed_min)
             speeds.append(seg_speed)
 
-            # T_h（ルックアヘッドゲイン）= Ld = lookahead_min + T_h × cmd_speed が fraction×d になるよう逆算
-            # これにより Ld がセグメント長の fraction 倍になる（速度が上がるほど Ld も伸びる）
+            # T_h: Ld = fraction×d になるよう逆算。負にはクランプ
             th = max(0.0, (self.lookahead_fraction * d - self.lookahead_min) / seg_speed)
             gains.append(th)
 
@@ -432,10 +366,7 @@ class PurePursuitController(Node):
 
         # --- 現在セグメントのパラメータ ---
         seg_speed, seg_gain = self._seg_params()
-        # コーナー通過目標速度: セグメント速度 × ratio（ratio が大きいほど速くコーナーを曲がる）
         corner_speed = seg_speed * self.corner_slowdown_ratio
-        # コーナー減速開始距離: base_dist を (seg_speed / speed_min) でスケール
-        # → 速いセグメントほど比例して遠くから減速を開始する
         corner_dist  = self.corner_slowdown_base_dist * (seg_speed / self.speed_min)
 
         # --- WP到達判定 ---
@@ -488,36 +419,28 @@ class PurePursuitController(Node):
 
         # --- 速度・ルックアヘッド計算 ---
         dist_to_target   = math.hypot(tx0 - self.current_x, ty0 - self.current_y)
-        # コーナー減速発動条件: 次のWPがコーナー指定 かつ そのWPまでの距離が corner_dist 以内
         approaching_corner = (
             self.waypoint_index in self._corner_wp_set and dist_to_target <= corner_dist
         )
 
         if approaching_corner:
-            # コーナー接近中: dist_to_target が corner_dist→0 に近づくにつれ
-            # cmd_speed を seg_speed → corner_speed へ線形に下げる（手前ほど速く、直前で最低速）
+            # corner_dist→0 で seg_speed→corner_speed へ線形ランプ
             ratio     = max(0.0, min(1.0, dist_to_target / corner_dist))
             cmd_speed = corner_speed + ratio * (seg_speed - corner_speed)
         elif self._corner_exit_dist_remaining > 0:
-            # コーナー通過直後の加速ランプ: corner_speed から次セグメントの seg_speed へ線形に上げる
-            # _corner_exit_dist_remaining が corner_dist→0 に減るにつれ加速する
-            # corner_slowdown_base_dist を小さくするとこのランプも短くなり素早く加速する
+            # 出口ランプ: start_speed→次セグメント seg_speed へ線形ランプ
             ratio     = max(0.0, min(1.0,
                            self._corner_exit_dist_remaining / self._corner_exit_total_dist))
             cmd_speed = self._corner_exit_start_speed + (1.0 - ratio) * (seg_speed - self._corner_exit_start_speed)
         else:
-            # 通常走行: セグメント目標速度をそのまま指令
             cmd_speed = seg_speed
 
-        # 安全上限クランプ（max_speed_mps を超えないよう保護）
         cmd_speed = max(0.0, min(self.max_speed, cmd_speed))
 
-        # Ld = lookahead_min + T_h × cmd_speed
-        # ランプ中は cmd_speed が変化するので Ld もそれに追従して変化する
+        # Ld = Ld_min + T_h × cmd_speed（ランプ中も指令速度に追従）
         lookahead_dist = self.lookahead_min + seg_gain * cmd_speed
         if approaching_corner:
-            # コーナー手前: Ld がコーナーWPを越えて次区間に先読みしないようキャップ
-            # これがないとルックアヘッド目標が次区間方向に飛び、コーナーを直進してしまう
+            # コーナー手前でLdがWPを越えないようキャップ（次区間への先読み防止）
             lookahead_dist = min(lookahead_dist, dist_to_target)
 
         tx, ty  = self._lookahead_target(lookahead_dist)
@@ -528,13 +451,10 @@ class PurePursuitController(Node):
         alpha = math.atan2(math.sin(target_bearing - self.heading),
                            math.cos(target_bearing - self.heading))
 
-        # Pure Pursuit ステアリング則: δ = atan2(2·L·sin(α), Ld)
-        # α が大きい（ずれが大きい）ほど、Ld が小さいほど、ステア角が大きくなる
         steer = (
             math.atan2(2.0 * self.wheelbase * math.sin(alpha), ld_actual)
             if ld_actual >= 1e-3 else 0.0
         )
-        # max_steering_angle でクランプ（物理的な最大舵角）
         steer = max(-self.max_steer, min(self.max_steer, steer))
 
         self._publish_command(cmd_speed, steer)
@@ -543,12 +463,6 @@ class PurePursuitController(Node):
         steer_deg = math.degrees(steer)
         self._tuning_writer.writerow([
             f'{time.time():.3f}',
-            f'{self.current_x:.3f}',
-            f'{self.current_y:.3f}',
-            f'{self.current_speed:.3f}',
-            f'{self.waypoint_index}',
-            f'{dist_to_target:.3f}',
-            f'{1 if approaching_corner else 0}',
             f'{cross_track_error:.3f}',
             f'{alpha_deg:.2f}',
             f'{steer_deg:.2f}',

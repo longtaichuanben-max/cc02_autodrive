@@ -73,6 +73,21 @@ def generate_launch_description():
         default_value='0,2,6,8',
         description='Pure Pursuit: 減速するWPインデックスをカンマ区切りで指定（skip前0-based、例: 0,2,6,8）'
     )
+    corner_slowdown_ratio_arg = DeclareLaunchArgument(
+        'corner_slowdown_ratio',
+        default_value='0.5',
+        description='Pure Pursuit: コーナー速度 = seg_speed × ratio'
+    )
+    corner_slowdown_base_dist_arg = DeclareLaunchArgument(
+        'corner_slowdown_base_dist',
+        default_value='5.0',
+        description='Pure Pursuit: speed_min時のコーナー減速開始距離 [m]'
+    )
+    speed_max_arg = DeclareLaunchArgument(
+        'speed_max',
+        default_value='2.5',
+        description='Pure Pursuit: セグメント最高速度 [m/s]'
+    )
 
     is_pid = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'pid'"])
     is_stanley = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'stanley'"])
@@ -104,6 +119,9 @@ def generate_launch_description():
         parameters=[{
             'wp_file': LaunchConfiguration('wp_file'),
             'corner_wp_indices': LaunchConfiguration('corner_wp_indices'),
+            'corner_slowdown_ratio': LaunchConfiguration('corner_slowdown_ratio'),
+            'corner_slowdown_base_dist': LaunchConfiguration('corner_slowdown_base_dist'),
+            'speed_max': LaunchConfiguration('speed_max'),
         }],
         condition=IfCondition(is_pure_pursuit),
     )
@@ -129,6 +147,9 @@ def generate_launch_description():
         log_file_arg,
         controller_arg,
         corner_wp_indices_arg,
+        corner_slowdown_ratio_arg,
+        corner_slowdown_base_dist_arg,
+        speed_max_arg,
         pid_node,
         stanley_node,
         pure_pursuit_node,
