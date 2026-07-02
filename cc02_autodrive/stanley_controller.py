@@ -2,7 +2,6 @@ import math
 import csv
 import os
 import time
-import datetime
 import numpy as np
 import pymap3d as pm
 import rclpy
@@ -23,7 +22,9 @@ _STATUS_NAMES = {
     GnssSolution.STATUS_EKF:    'EKF',
 }
 
-_TUNING_LOG_HEADER = ['time', 'cross_track_error', 'heading_error_deg', 'steer_deg', 'speed']
+_TUNING_LOG_HEADER = [
+    'time', 'cross_track_error', 'heading_error_deg', 'cross_track_term_deg', 'steer_deg', 'speed',
+]
 
 
 def _format_status_info(status: int, pos_enu_cov) -> str:
@@ -39,34 +40,47 @@ class StanleyController(Node):
         self.get_logger().info('Stanley Controller Node has been started!')
 
         self.declare_parameter('wp_file', 'wp_position_basic.csv')
-        self.declare_parameter('wp_radius', 0.6)                # m: WP到達とみなす距離
-        self.declare_parameter('speed_fix',   2.0)              # m/s: RTK-FIX時の速度
-        self.declare_parameter('speed_float', 0.3)              # m/s: RTK-FLOAT時の速度
-        self.declare_parameter('stanley_k',  0.5)               # 横偏差ゲイン
-        self.declare_parameter('k_soft',     2.0)               # m/s: 低速時の分母ソフトニング定数
-        self.declare_parameter('max_steering_angle', math.radians(25.0))  # rad
-        self.declare_parameter('bootstrap_speed', 0.3)          # m/s: ヘディング確定前の直進速度
-        self.declare_parameter('min_speed_for_heading', 0.05)   # m/s
-        self.declare_parameter('heading_smoothing_w', 0.15)     # ヘディングEMA係数
-        self.declare_parameter('max_speed_mps', 3.0)            # m/s: 速度の安全上限
+        self.declare_parameter('wp_radius', 0.7)
+        self.declare_parameter('wp_radii', "")           # 個別半径 例:"1:0.5,3:2.0" (arc挿入後インデックス)
+        self.declare_parameter('speed_fix', 1.5)         # m/s: RTK-FIX時の速度
+        self.declare_parameter('speed_float', 1.0)       # m/s: RTK-FLOAT時の速度
+        self.declare_parameter('stanley_k', 0.5)         # 横偏差ゲイン
+        self.declare_parameter('k_soft', 1.0)            # m/s: 低速時ソフトニング定数
+        self.declare_parameter('max_steering_angle', math.radians(25.0))
+        self.declare_parameter('wheelbase_m', 0.267)     # m: 前後軸間距離（コーナー円弧計算に使用）
+        self.declare_parameter('bootstrap_speed', 0.3)
+        self.declare_parameter('min_speed_for_heading', 0.05)
+        self.declare_parameter('heading_smoothing_w', 0.35)
+        self.declare_parameter('max_speed_mps', 4.0)
         self.declare_parameter('gnss_timeout_s', 2.0)
-        self.declare_parameter('corner_wp_indices', '')          # カンマ区切り（例: "2,5,6,8"）
-        self.declare_parameter('corner_slowdown_speed', 0.7)    # m/s: コーナー速度上限
-        self.declare_parameter('corner_slowdown_dist', 14.0)    # m: コーナー減速開始距離
-        self.declare_parameter('kf_pos_noise_std', 0.02)        # m: GNSS位置ノイズσ
-        self.declare_parameter('kf_vel_noise_std', 0.1)         # m/s: GNSS速度ノイズσ
-        self.declare_parameter('kf_process_noise', 1.0)         # m/s²: 加速度不確かさσ
-
-        default_tuning_log = 'stanley_log_' + datetime.datetime.now().strftime('%Y%m%d_%H%M%S') + '.csv'
+        self.declare_parameter('corner_wp_indices', '0,2,6,8')
+        self.declare_parameter('wp_skip_indices', "3,7")
+        self.declare_parameter('corner_slowdown_speed', 1.0)
+        self.declare_parameter('corner_slowdown_dist', 8.0)
+        default_tuning_log = os.path.join(
+            os.path.expanduser('~'), 'ros2_ws', 'gnss_logs', 'stanley_log_latest.csv'
+        )
         self.declare_parameter('tuning_log_file', default_tuning_log)
 
         wp_file                    = self.get_parameter('wp_file').value
         self.waypoint_radius       = self.get_parameter('wp_radius').value
+        _wp_radii_str = self.get_parameter('wp_radii').value.strip()
+        self._wp_radius_map: dict = {}
+        if _wp_radii_str:
+            for token in _wp_radii_str.split(','):
+                token = token.strip()
+                if ':' in token:
+                    idx_s, r_s = token.split(':', 1)
+                    try:
+                        self._wp_radius_map[int(idx_s.strip())] = float(r_s.strip())
+                    except ValueError:
+                        self.get_logger().warn(f'wp_radii の書式エラー: "{token}" を無視します')
         self.speed_fix             = self.get_parameter('speed_fix').value
         self.speed_float           = self.get_parameter('speed_float').value
         self.stanley_k             = self.get_parameter('stanley_k').value
         self.k_soft                = self.get_parameter('k_soft').value
         self.max_steer             = self.get_parameter('max_steering_angle').value
+        self.wheelbase             = self.get_parameter('wheelbase_m').value
         self.bootstrap_speed       = self.get_parameter('bootstrap_speed').value
         self.min_speed_for_heading = self.get_parameter('min_speed_for_heading').value
         self.heading_smoothing_w   = self.get_parameter('heading_smoothing_w').value
@@ -77,11 +91,13 @@ class StanleyController(Node):
             int(s.strip()) for s in raw_str.split(',')
             if s.strip().lstrip('-').isdigit() and int(s.strip()) >= 0
         ) if raw_str else set()
+        raw_skip = self.get_parameter('wp_skip_indices').value.strip()
+        self._skip_wp_set = set(
+            int(s.strip()) for s in raw_skip.split(',')
+            if s.strip().lstrip('-').isdigit() and int(s.strip()) > 0
+        ) if raw_skip else set()
         self.corner_slowdown_speed = self.get_parameter('corner_slowdown_speed').value
         self.corner_slowdown_dist  = self.get_parameter('corner_slowdown_dist').value
-        self.kf_pos_noise_std = self.get_parameter('kf_pos_noise_std').value
-        self.kf_vel_noise_std = self.get_parameter('kf_vel_noise_std').value
-        self.kf_process_noise = self.get_parameter('kf_process_noise').value
         tuning_log_file            = self.get_parameter('tuning_log_file').value
 
         self._tuning_csv_file = open(tuning_log_file, 'w', newline='')
@@ -100,23 +116,18 @@ class StanleyController(Node):
             raise SystemExit(1)
         self.get_logger().info(f'Waypoint {len(self.wps_llh)}点 読み込み完了: {wp_file}')
 
-        self.waypoints = None
+        self.waypoints  = None
         self.waypoint_index = 0
         self.origin_ecef = None
 
-        self.current_x      = None  # KF平滑化後のENU-X [m]（制御計算に使う）
-        self.current_y      = None  # KF平滑化後のENU-Y [m]
-        self.raw_x          = None  # 生のGNSS位置 ENU-X [m]（WP到達判定専用）
-        self.raw_y          = None
+        self.current_x      = None
+        self.current_y      = None
         self.current_speed  = 0.0
         self.heading        = None
         self._ve_filtered   = 0.0
         self._vn_filtered   = 0.0
         self.current_status = 0
         self.fix_achieved   = False
-        self._kf_state      = None
-        self._kf_P          = None
-        self._kf_last_time  = None
         self._corner_exit_dist_remaining = 0.0
         self._last_ctrl_x   = None
         self._last_ctrl_y   = None
@@ -169,6 +180,21 @@ class StanleyController(Node):
         )
         self.waypoints = np.column_stack([e, n])
 
+        if self._skip_wp_set:
+            n_total = len(self.waypoints)
+            valid_skip = {i for i in self._skip_wp_set if 0 < i < n_total - 1}
+            if valid_skip:
+                keep = [i for i in range(n_total) if i not in valid_skip]
+                old_to_new = {old: new for new, old in enumerate(keep)}
+                self.waypoints = self.waypoints[np.array(keep)]
+                self._corner_wp_set = {old_to_new[i] for i in self._corner_wp_set if i in old_to_new}
+                self._wp_radius_map = {
+                    old_to_new[i]: r for i, r in self._wp_radius_map.items() if i in old_to_new
+                }
+                self.get_logger().info(
+                    f'WPスキップ: 元WP{sorted(valid_skip)} を経路から除外 → {len(self.waypoints)}点で走行'
+                )
+
         if self._corner_wp_set:
             for idx in sorted(self._corner_wp_set):
                 self.get_logger().info(
@@ -176,42 +202,16 @@ class StanleyController(Node):
                     f'{self.corner_slowdown_speed:.1f}m/s、通過後{self.corner_slowdown_dist:.1f}mかけてランプ加速'
                 )
         else:
-            self.get_logger().info('減速WP指定なし（corner_wp_indices が空）')
+            self.get_logger().info('減速WP指定なし → 全WPを順に追従')
+
+        if not self._wp_radius_map:
+            self.get_logger().info(f'WP到達半径: 全WP共通 {self.waypoint_radius:.2f}m')
 
         self.get_logger().info(
             f'GNSS ENU原点確定 → Waypoint {len(self.waypoints)}点を変換完了（直線区間で接続）。'
             f'最初の目標 → X={self.waypoints[0,0]:.2f}m, Y={self.waypoints[0,1]:.2f}m'
         )
         return True
-
-    # 線形カルマンフィルタ（定速度モデル）。状態=[x, y, vx, vy]、観測=[x, y, vx, vy]。
-    # H=I のため S=P_pred+R、K=P_pred@inv(S) に簡略化している。
-    def _kf_update(self, x: float, y: float, vx: float, vy: float, dt: float):
-        F = np.array([[1.0, 0.0,  dt, 0.0],
-                      [0.0, 1.0, 0.0,  dt],
-                      [0.0, 0.0, 1.0, 0.0],
-                      [0.0, 0.0, 0.0, 1.0]])
-        q = self.kf_process_noise ** 2
-        Q = q * np.array([[dt**4 / 4, 0.0,       dt**3 / 2, 0.0      ],
-                           [0.0,       dt**4 / 4, 0.0,       dt**3 / 2],
-                           [dt**3 / 2, 0.0,       dt**2,     0.0      ],
-                           [0.0,       dt**3 / 2, 0.0,       dt**2    ]])
-        rp = self.kf_pos_noise_std ** 2
-        rv = self.kf_vel_noise_std ** 2
-        R = np.diag([rp, rp, rv, rv])
-
-        if self._kf_state is None:
-            self._kf_state = np.array([x, y, vx, vy])
-            self._kf_P = R.copy()
-            return x, y
-
-        x_pred = F @ self._kf_state
-        P_pred = F @ self._kf_P @ F.T + Q
-        z = np.array([x, y, vx, vy])
-        K = P_pred @ np.linalg.inv(P_pred + R)
-        self._kf_state = x_pred + K @ (z - x_pred)
-        self._kf_P = (np.eye(4) - K) @ P_pred
-        return float(self._kf_state[0]), float(self._kf_state[1])
 
     def _gnss_callback(self, msg: GnssSolution):
         self.current_status = msg.status
@@ -229,9 +229,6 @@ class StanleyController(Node):
             self._resolve_origin_and_convert(msg)
             return
 
-        self.raw_x = msg.pos_enu.x
-        self.raw_y = msg.pos_enu.y
-
         ve, vn = msg.vel_enu.x, msg.vel_enu.y
         self.current_speed = math.hypot(ve, vn)
         if self.current_speed >= self.min_speed_for_heading:
@@ -243,17 +240,13 @@ class StanleyController(Node):
                 self._vn_filtered = (1 - w) * self._vn_filtered + w * vn
             self.heading = math.atan2(self._vn_filtered, self._ve_filtered)
 
-        now = time.time()
-        dt = min(max(now - self._kf_last_time, 0.01), 0.5) if self._kf_last_time is not None else 0.1
-        self._kf_last_time = now
-        kf_x, kf_y = self._kf_update(msg.pos_enu.x, msg.pos_enu.y, ve, vn, dt)
-        self.current_x = kf_x
-        self.current_y = kf_y
+        self.current_x = msg.pos_enu.x
+        self.current_y = msg.pos_enu.y
 
         status_str = 'FIX' if self.current_status == GnssSolution.STATUS_FIX else 'FLOAT'
         self.get_logger().info(
             f'GNSS: Status={status_str}  '
-            f'raw=({self.raw_x:.2f},{self.raw_y:.2f})m  KF=({self.current_x:.2f},{self.current_y:.2f})m  '
+            f'pos=({self.current_x:.2f},{self.current_y:.2f})m  '
             f'speed={self.current_speed:.2f}m/s'
         )
 
@@ -269,12 +262,10 @@ class StanleyController(Node):
             return
 
         if self.heading is None:
-            speed = max(0.0, min(self.bootstrap_speed, self.max_speed))
-            self._publish_command(speed, 0.0)
+            self._publish_command(max(0.0, min(self.bootstrap_speed, self.max_speed)), 0.0)
             self.get_logger().info('ヘディング未確定 → 直進ブートストラップ中...')
             return
 
-        # コーナー通過後の立ち上がり減速残距離を走行距離分だけ消費
         if self._last_ctrl_x is not None and self._corner_exit_dist_remaining > 0:
             dist_moved = math.hypot(self.current_x - self._last_ctrl_x,
                                     self.current_y - self._last_ctrl_y)
@@ -284,9 +275,9 @@ class StanleyController(Node):
 
         tx, ty = self.waypoints[self.waypoint_index]
 
-        # WP到達判定は生GNSS位置で行う（KF位置では通過タイミングが遅れる）
-        dist_to_wp = math.hypot(tx - self.raw_x, ty - self.raw_y)
-        if dist_to_wp <= self.waypoint_radius:
+        wp_r = self._wp_radius_map.get(self.waypoint_index, self.waypoint_radius)
+        dist_to_wp = math.hypot(tx - self.current_x, ty - self.current_y)
+        if dist_to_wp <= wp_r:
             passed_idx = self.waypoint_index
             self.score += 10
             self.get_logger().info(
@@ -310,25 +301,19 @@ class StanleyController(Node):
                 )
 
             tx, ty = self.waypoints[self.waypoint_index]
-            self.get_logger().info(
-                f'次の目標 → WP[{self.waypoint_index}] X={tx:.2f}m, Y={ty:.2f}m'
-            )
 
-        # セグメント開始点: 直前WP（waypoint_index=0の起動直後は現在地）
+        # 経路セグメント（直前WP → 目標WP）
         prev_idx = self.waypoint_index - 1
         if prev_idx >= 0:
             sx, sy = float(self.waypoints[prev_idx][0]), float(self.waypoints[prev_idx][1])
         else:
             sx, sy = self.current_x, self.current_y
 
-        # 経路方位（直前WP → 目標WP）
         path_heading = math.atan2(ty - sy, tx - sx)
 
-        # 方位誤差（-π〜πに正規化）
         heading_error = path_heading - self.heading
         heading_error = math.atan2(math.sin(heading_error), math.cos(heading_error))
 
-        # 横偏差（セグメントへの符号付き垂直距離、右側が正）
         seg_dx, seg_dy = tx - sx, ty - sy
         seg_len = math.hypot(seg_dx, seg_dy)
         if seg_len > 1e-6:
@@ -338,7 +323,7 @@ class StanleyController(Node):
         else:
             cross_track_error = 0.0
 
-        # Stanley則: δ = heading_error + atan2(k * CTE, k_soft + speed)
+        # Stanley則: δ = heading_error + atan2(k × CTE, k_soft + v)
         cross_track_term = math.atan2(
             self.stanley_k * cross_track_error,
             self.k_soft + self.current_speed
@@ -346,7 +331,6 @@ class StanleyController(Node):
         steer = heading_error + cross_track_term
         steer = max(-self.max_steer, min(self.max_steer, steer))
 
-        # 速度計算（コーナー減速ランプ付き）
         speed = self.speed_fix if self.current_status == GnssSolution.STATUS_FIX else self.speed_float
         speed = max(0.0, min(self.max_speed, speed))
         dist_to_target = math.hypot(tx - self.current_x, ty - self.current_y)
@@ -363,13 +347,12 @@ class StanleyController(Node):
 
         self._publish_command(speed, steer)
 
-        heading_error_deg = math.degrees(heading_error)
-        steer_deg = math.degrees(steer)
         self._tuning_writer.writerow([
             f'{time.time():.3f}',
             f'{cross_track_error:.3f}',
-            f'{heading_error_deg:.2f}',
-            f'{steer_deg:.2f}',
+            f'{math.degrees(heading_error):.2f}',
+            f'{math.degrees(cross_track_term):.2f}',
+            f'{math.degrees(steer):.2f}',
             f'{self.current_speed:.3f}',
         ])
         self._tuning_csv_file.flush()
@@ -377,9 +360,10 @@ class StanleyController(Node):
 
         self.get_logger().debug(
             f'WP[{self.waypoint_index}] '
-            f'方位誤差={heading_error_deg:+.1f}°  '
+            f'方位誤差={math.degrees(heading_error):+.1f}°  '
             f'横偏差={cross_track_error:+.2f}m  '
-            f'ステア={steer_deg:+.1f}°  '
+            f'CTE項={math.degrees(cross_track_term):+.1f}°  '
+            f'ステア={math.degrees(steer):+.1f}°  '
             f'速度={speed:.1f}m/s  '
             f'Status={"FIX" if self.current_status == GnssSolution.STATUS_FIX else "FLOAT"}'
         )

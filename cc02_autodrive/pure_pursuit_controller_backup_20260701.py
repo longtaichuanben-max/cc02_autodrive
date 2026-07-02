@@ -52,7 +52,7 @@ class PurePursuitController(Node):
         self.declare_parameter('heading_smoothing_w', 0.2)     # ヘディングEMA係数（小さいほど遅延・安定）
         self.declare_parameter('max_speed_mps', 3.0)            # m/s: 速度の安全上限
         self.declare_parameter('gnss_timeout_s', 2.0)           # s: GNSS受信タイムアウト
-        self.declare_parameter('corner_wp_indices', '')              # 減速対象WPインデックス カンマ区切り（例: "1,3,5"、空=なし）
+        self.declare_parameter('corner_wp_indices', "")              # 減速対象WPインデックス カンマ区切り（例: "1,3,5"、空=なし）
         self.declare_parameter('corner_slowdown_speed', 0.7)        # m/s: コーナー接近時の速度上限
         self.declare_parameter('corner_slowdown_dist', 14.0)        # m: コーナー減速を開始する距離
         self.declare_parameter('kf_pos_noise_std', 0.02)  # m: GNSS位置ノイズσ（観測ノイズR）実測0.008m×2.5倍
