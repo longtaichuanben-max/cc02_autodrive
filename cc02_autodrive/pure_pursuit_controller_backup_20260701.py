@@ -39,21 +39,25 @@ class PurePursuitController(Node):
         self.get_logger().info('Pure Pursuit Controller Node has been started!')
 
         self.declare_parameter('wp_file', 'wp_position_basic.csv')
-        self.declare_parameter('wp_radius', 0.7)                # m: コーナーWP到達とみなす距離
-        self.declare_parameter('wp_radius_non_corner', 0.85)    # m: 非コーナーWP到達とみなす距離（大きめにしてスムーズに通過）
+        self.declare_parameter('wp_radius', 0.7)                # m: コーナーWP到達とみなす距離（wp_radiiで個別指定がない場合のデフォルト）
+        self.declare_parameter('wp_radius_non_corner', 0.85)    # m: 非コーナーWP到達とみなす距離（wp_radiiで個別指定がない場合のデフォルト）
+        # wp_radii: WPごとに半径を個別指定（0-basedインデックス:半径, ...）
+        #   例: '3:1.0,5:1.2,7:2.0' → WP[3]=1.0m, WP[5]=1.2m, WP[7]=2.0m
+        #   wp_radiiで指定したWPはコーナー/非コーナー判定に関わらずその半径を使用する
+        self.declare_parameter('wp_radii', '3:3.0,7:3.0')
         self.declare_parameter('speed_fix',   2.5)              # m/s: RTK-FIX時の速度
-        self.declare_parameter('speed_float', 0.3)              # m/s: RTK-FLOAT時の速度
+        self.declare_parameter('speed_float', 1.5)              # m/s: RTK-FLOAT時の速度（ESC最低1.4m/s以上が必要）
         self.declare_parameter('wheelbase_m', 0.267)            # m: 前後輪軸間距離（実測値）
-        self.declare_parameter('lookahead_min', 1.0)            # m: 最低ルックアヘッド距離
+        self.declare_parameter('lookahead_min', 1.5)            # m: 最低ルックアヘッド距離
         self.declare_parameter('lookahead_gain', 2.0)           # s: ルックアヘッド速度ゲイン（Ld = min + gain × speed）
         self.declare_parameter('max_steering_angle', math.radians(25.0))  # rad: ステアリング最大角
-        self.declare_parameter('bootstrap_speed', 0.3)          # m/s: ヘディング確定前の直進速度
+        self.declare_parameter('bootstrap_speed', 1.5)          # m/s: ヘディング確定前の直進速度（ESC最低1.4m/s以上が必要）
         self.declare_parameter('min_speed_for_heading', 0.05)   # m/s: ヘディング推定に使う最低速度
         self.declare_parameter('heading_smoothing_w', 0.2)     # ヘディングEMA係数（小さいほど遅延・安定）
         self.declare_parameter('max_speed_mps', 3.0)            # m/s: 速度の安全上限
         self.declare_parameter('gnss_timeout_s', 2.0)           # s: GNSS受信タイムアウト
-        self.declare_parameter('corner_wp_indices', "")              # 減速対象WPインデックス カンマ区切り（例: "1,3,5"、空=なし）
-        self.declare_parameter('corner_slowdown_speed', 0.7)        # m/s: コーナー接近時の速度上限
+        self.declare_parameter('corner_wp_indices', "0,2,6,8")              # 減速対象WPインデックス カンマ区切り（例: "1,3,5"、空=なし）
+        self.declare_parameter('corner_slowdown_speed', 1.8)        # m/s: コーナー接近時の速度上限（ESC最低1.4m/s以上が必要）
         self.declare_parameter('corner_slowdown_dist', 14.0)        # m: コーナー減速を開始する距離
         self.declare_parameter('kf_pos_noise_std', 0.02)  # m: GNSS位置ノイズσ（観測ノイズR）実測0.008m×2.5倍
         self.declare_parameter('kf_vel_noise_std', 0.1)   # m/s: GNSS速度ノイズσ（観測ノイズR）
@@ -65,6 +69,17 @@ class PurePursuitController(Node):
         wp_file                    = self.get_parameter('wp_file').value
         self.waypoint_radius            = self.get_parameter('wp_radius').value
         self.waypoint_radius_non_corner = self.get_parameter('wp_radius_non_corner').value
+        _wp_radii_str = self.get_parameter('wp_radii').value.strip()
+        self._wp_radius_map: dict = {}
+        if _wp_radii_str:
+            for token in _wp_radii_str.split(','):
+                token = token.strip()
+                if ':' in token:
+                    idx_s, r_s = token.split(':', 1)
+                    try:
+                        self._wp_radius_map[int(idx_s.strip())] = float(r_s.strip())
+                    except ValueError:
+                        self.get_logger().warn(f'wp_radii の書式エラー: "{token}" を無視します')
         self.speed_fix             = self.get_parameter('speed_fix').value
         self.speed_float           = self.get_parameter('speed_float').value
         self.wheelbase             = self.get_parameter('wheelbase_m').value
@@ -187,6 +202,12 @@ class PurePursuitController(Node):
         else:
             self.get_logger().info('減速WP指定なし → 全WPを順に追従（wp_radius統一）')
 
+        if self._wp_radius_map:
+            for idx, r in sorted(self._wp_radius_map.items()):
+                self.get_logger().info(f'  WP[{idx}] 到達半径: {r:.2f}m（個別指定）')
+        else:
+            self.get_logger().info('wp_radii 個別指定なし → コーナー/非コーナーのデフォルト半径を使用')
+
         self.get_logger().info(
             f'GNSS ENU原点確定 → Waypoint {len(self.waypoints)}点を変換完了（直線区間で接続）。'
             f'最初の目標 → X={self.waypoints[0,0]:.2f}m, Y={self.waypoints[0,1]:.2f}m'
@@ -289,6 +310,21 @@ class PurePursuitController(Node):
             idx += 1
         return float(self.waypoints[-1][0]), float(self.waypoints[-1][1])
 
+    # waypoint_index 以降のルートを辿り、次のコーナーWPまでのルート距離を返す（コーナーなし→inf）
+    def _route_dist_to_next_corner(self) -> float:
+        idx = self.waypoint_index
+        px, py = self.current_x, self.current_y
+        dist = 0.0
+        n = len(self.waypoints)
+        while idx < n:
+            wx, wy = self.waypoints[idx]
+            dist += math.hypot(wx - px, wy - py)
+            if idx in self._corner_wp_set:
+                return dist
+            px, py = wx, wy
+            idx += 1
+        return float('inf')
+
     # Pure Pursuit 制御
     def _control(self):
         if self.current_x is None:
@@ -319,7 +355,8 @@ class PurePursuitController(Node):
         # WP到達判定は生のGNSS位置で行う（KF位置ではWP通過タイミングが遅れる）
         dist_to_wp = math.hypot(tx0 - self.raw_x, ty0 - self.raw_y)
         is_corner = self.waypoint_index in self._corner_wp_set
-        arrival_radius = self.waypoint_radius if is_corner else self.waypoint_radius_non_corner
+        default_radius = self.waypoint_radius if is_corner else self.waypoint_radius_non_corner
+        arrival_radius = self._wp_radius_map.get(self.waypoint_index, default_radius)
         if dist_to_wp <= arrival_radius:
             passed_idx = self.waypoint_index
             self.score += 10
@@ -333,9 +370,9 @@ class PurePursuitController(Node):
                 self.score += 50
                 self.get_logger().info(
                     f'★★★ 1周完了！ 周回ボーナス +50点 → 合計{self.score}点 '
-                    f'停止せずWP[1]から再周回します'
+                    f'停止せずWP[0]（スタート地点）経由で再周回します'
                 )
-                self.waypoint_index = 1
+                self.waypoint_index = 0
 
             # 通過したWPがコーナー対象なら立ち上がり減速をセット
             if passed_idx in self._corner_wp_set:
@@ -377,9 +414,10 @@ class PurePursuitController(Node):
             # LdがWPを超えないようにキャップ: WP手前で次セグメントに先回りするのを防ぐ
             lookahead_dist = min(lookahead_dist, dist_to_target)
         elif self._corner_exit_dist_remaining > 0:
-            # コーナー通過後: corner_ld_minから始めてLdをランプ拡大（小さいLdによる制御飽和・発散を防ぐ）
+            # コーナー通過直後はlookahead_minから拡大: 直後にmax_steer相当の鋭い曲がりを実現し
+            # 非コーナーWPを含むコーナー後の経路に素早く乗る（lookahead_gain=2.0の直線安定性と両立）
             ratio = max(0.0, min(1.0, self._corner_exit_dist_remaining / self.corner_slowdown_dist))
-            lookahead_dist = corner_ld_min + (1.0 - ratio) * (lookahead_dist - corner_ld_min)
+            lookahead_dist = self.lookahead_min + (1.0 - ratio) * (lookahead_dist - self.lookahead_min)
         tx, ty = self._lookahead_target(lookahead_dist)
 
         dx, dy = tx - self.current_x, ty - self.current_y
@@ -397,16 +435,25 @@ class PurePursuitController(Node):
             steer = math.atan2(2.0 * self.wheelbase * math.sin(alpha), ld_actual)
         steer = max(-self.max_steer, min(self.max_steer, steer))
 
-        speed = self.speed_fix if self.current_status == GnssSolution.STATUS_FIX else self.speed_float
-        speed = max(0.0, min(self.max_speed, speed))
-        if approaching_corner:
-            # コーナー手前: corner_slowdown_dist→0 にかけて speed_fix→corner_slowdown_speed へ線形ランプ
-            ratio = max(0.0, min(1.0, dist_to_target / self.corner_slowdown_dist))
-            speed = self.corner_slowdown_speed + ratio * (speed - self.corner_slowdown_speed)
-        elif self._corner_exit_dist_remaining > 0:
-            # コーナー通過後: corner_slowdown_dist→0 にかけて corner_slowdown_speed→speed_fix へ線形ランプ
+        speed_base = self.speed_fix if self.current_status == GnssSolution.STATUS_FIX else self.speed_float
+        speed_base = max(0.0, min(self.max_speed, speed_base))
+
+        # 接近減速（ルート距離先読み）と exit ramp を独立計算し、安全側（低い方）を採用
+        # → コーナーが連続していても exit ramp にブロックされず次のコーナー減速が効く
+        route_dist_to_corner = self._route_dist_to_next_corner()
+        if route_dist_to_corner <= self.corner_slowdown_dist:
+            ratio = max(0.0, min(1.0, route_dist_to_corner / self.corner_slowdown_dist))
+            speed_approach = self.corner_slowdown_speed + ratio * (speed_base - self.corner_slowdown_speed)
+        else:
+            speed_approach = speed_base
+
+        if self._corner_exit_dist_remaining > 0:
             ratio = max(0.0, min(1.0, self._corner_exit_dist_remaining / self.corner_slowdown_dist))
-            speed = self.corner_slowdown_speed + (1.0 - ratio) * (speed - self.corner_slowdown_speed)
+            speed_exit = self.corner_slowdown_speed + (1.0 - ratio) * (speed_base - self.corner_slowdown_speed)
+        else:
+            speed_exit = speed_base
+
+        speed = min(speed_approach, speed_exit)
 
         self._publish_command(speed, steer)
 

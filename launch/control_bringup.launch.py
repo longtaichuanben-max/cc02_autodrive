@@ -33,9 +33,7 @@ gnss_log_latest.csv。固定ファイル名で、毎回起動時に上書きさ�
   ros2 launch cc02_autodrive control_bringup.launch.py controller:=stanley
 """
 
-import glob
 import os
-from datetime import datetime
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -43,20 +41,6 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-
-
-_MAX_LOGS = 5
-
-
-def _cleanup_old_logs(log_dir: str) -> None:
-    """各ログパターンで古いファイルを削除し、最新 _MAX_LOGS-1 本だけ残す（今回分を加えて計 _MAX_LOGS 本になる）。"""
-    for pattern in ('gnss_log_*.csv', 'pure_pursuit_log_*.csv'):
-        files = sorted(glob.glob(os.path.join(log_dir, pattern)))
-        for old in files[:max(0, len(files) - (_MAX_LOGS - 1))]:
-            try:
-                os.remove(old)
-            except OSError:
-                pass
 
 
 def generate_launch_description():
@@ -68,11 +52,9 @@ def generate_launch_description():
 
     log_dir = os.path.join(os.path.expanduser('~'), 'ros2_ws', 'gnss_logs')
     os.makedirs(log_dir, exist_ok=True)
-    _cleanup_old_logs(log_dir)
 
-    ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-    default_log_file = os.path.join(log_dir, f'gnss_log_{ts}.csv')
-    default_pp_log   = os.path.join(log_dir, f'pure_pursuit_log_{ts}.csv')
+    default_log_file = os.path.join(log_dir, 'gnss_log_latest.csv')
+    default_pp_log   = os.path.join(log_dir, 'pure_pursuit_log_latest.csv')
 
     wp_file_arg = DeclareLaunchArgument(
         'wp_file',
@@ -96,13 +78,19 @@ def generate_launch_description():
     )
     corner_wp_indices_arg = DeclareLaunchArgument(
         'corner_wp_indices',
-        default_value='0,2,6,8',
+        default_value='2,6,8',
         description='Pure Pursuit: 減速するWPインデックスをカンマ区切りで指定（skip前0-based、例: 0,2,6,8）'
+    )
+    wp_radii_arg = DeclareLaunchArgument(
+        'wp_radii',
+        default_value='',
+        description='Pure Pursuit: WPごとの到達半径（0-basedインデックス:半径のカンマ区切り、例: 3:1.0,5:1.2,7:2.0）空=デフォルト半径を使用'
     )
 
     is_pid = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'pid'"])
     is_stanley = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'stanley'"])
     is_pure_pursuit = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'pure_pursuit'"])
+    is_pure_pursuit_backup = PythonExpression(["'", LaunchConfiguration('controller'), "' == 'pure_pursuit_backup'"])
 
     pid_node = Node(
         package='cc02_autodrive',
@@ -135,6 +123,20 @@ def generate_launch_description():
         condition=IfCondition(is_pure_pursuit),
     )
 
+    pure_pursuit_backup_node = Node(
+        package='cc02_autodrive',
+        executable='pure_pursuit_backup_node',
+        name='pure_pursuit_controller',
+        output='screen',
+        parameters=[{
+            'wp_file': LaunchConfiguration('wp_file'),
+            'corner_wp_indices': LaunchConfiguration('corner_wp_indices'),
+            'tuning_log_file': LaunchConfiguration('tuning_log_file'),
+            'wp_radii': LaunchConfiguration('wp_radii'),
+        }],
+        condition=IfCondition(is_pure_pursuit_backup),
+    )
+
     vehicle_driver_node = Node(
         package='rc_car_driver',
         executable='vehicle_driver',
@@ -157,9 +159,11 @@ def generate_launch_description():
         tuning_log_file_arg,
         controller_arg,
         corner_wp_indices_arg,
+        wp_radii_arg,
         pid_node,
         stanley_node,
         pure_pursuit_node,
+        pure_pursuit_backup_node,
         vehicle_driver_node,
         gnss_logger_node,
     ])
