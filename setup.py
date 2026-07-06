@@ -16,7 +16,6 @@ setup(
             'package.xml',
             'cc02_autodrive/wp_position_basic.csv',
             'cc02_autodrive/wp_position_advance.csv',
-            'cc02_autodrive/wp_position_with_midpoints.csv',
         ]),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
     ],
@@ -33,10 +32,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'pid_node = cc02_autodrive.pid_controller:main',
-            'stanley_node = cc02_autodrive.stanley_controller:main',
             'pure_pursuit_node = cc02_autodrive.pure_pursuit_controller:main',
-            'pure_pursuit_backup_node = cc02_autodrive.pure_pursuit_controller_backup_20260701:main',
             'gnss_logger_node = cc02_autodrive.gnss_logger:main',
         ],
     },
