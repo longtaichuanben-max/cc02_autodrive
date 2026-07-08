@@ -37,6 +37,20 @@ def _format_status_info(status: int, pos_enu_cov) -> str:
     return f'status={status}({name}) 水平精度(目安)≈{acc_str}'
 
 
+def _parse_radius_map(raw: str) -> dict:
+    result = {}
+    if not raw:
+        return result
+    for s in raw.split(','):
+        parts = s.strip().split(':')
+        if len(parts) == 2:
+            try:
+                result[int(parts[0])] = float(parts[1])
+            except ValueError:
+                pass
+    return result
+
+
 def _parse_int_set(raw: str, positive_only: bool = False) -> set:
     return {
         int(v) for s in raw.split(',')
@@ -66,9 +80,8 @@ class PurePursuitController(Node):
         self.declare_parameter('heading_smoothing_w', 0.35)
         self.declare_parameter('max_speed_mps', 4.0)
         self.declare_parameter('gnss_timeout_s', 2.0)
-        self.declare_parameter('corner_wp_indices', '2,6,8')
+        self.declare_parameter('corner_wp_indices', '2,4,6,8')
         self.declare_parameter('lh_ramp_wp_indices', '6,8')
-        self.declare_parameter('wp_skip_indices', '')
         self.declare_parameter('corner_slowdown_ratio', 0.6)
         self.declare_parameter('corner_slowdown_base_dist', 10.0)
         default_log = os.path.join(
@@ -78,15 +91,7 @@ class PurePursuitController(Node):
 
         wp_file                   = self.get_parameter('wp_file').value
         self.waypoint_radius      = self.get_parameter('wp_radius').value
-        self._wp_radius_map: dict = {}
-        for token in self.get_parameter('wp_radii').value.strip().split(','):
-            if ':' not in (token := token.strip()):
-                continue
-            idx_s, r_s = token.split(':', 1)
-            try:
-                self._wp_radius_map[int(idx_s.strip())] = float(r_s.strip())
-            except ValueError:
-                self.get_logger().warn(f'wp_radii の書式エラー: "{token}" を無視します')
+        self._wp_radius_map       = _parse_radius_map(self.get_parameter('wp_radii').value)
         self.speed_min                 = self.get_parameter('speed_min').value
         self.speed_max                 = self.get_parameter('speed_max').value
         self.speed_dist_short          = self.get_parameter('speed_dist_short').value
@@ -102,8 +107,6 @@ class PurePursuitController(Node):
         self.gnss_timeout_s            = self.get_parameter('gnss_timeout_s').value
         self._corner_wp_set  = _parse_int_set(self.get_parameter('corner_wp_indices').value.strip())
         self._lh_ramp_wp_set = _parse_int_set(self.get_parameter('lh_ramp_wp_indices').value.strip())
-        self._skip_wp_set    = _parse_int_set(self.get_parameter('wp_skip_indices').value.strip(),
-                                              positive_only=True)
         self.corner_slowdown_ratio      = self.get_parameter('corner_slowdown_ratio').value
         self.corner_slowdown_base_dist  = self.get_parameter('corner_slowdown_base_dist').value
         tuning_log_file                = self.get_parameter('tuning_log_file').value
@@ -162,7 +165,12 @@ class PurePursuitController(Node):
 
         self.get_logger().info('pure_pursuit_controller 起動完了（GNSS ENU原点確定待ち）')
 
+    # ================================================================
+    # 1. ウェイポイント管理
+    # ================================================================
+    #　WPファイルを読み込む関数、そしてwaypointsというリストで返す
     def _load_waypoints_llh(self, filepath: str) -> list:
+        """CSVファイルから(lat, lon, height)のリストを読み込んで返す。"""
         waypoints = []
         if not os.path.exists(filepath):
             self.get_logger().error(f'ファイルが存在しません: {filepath}')
@@ -182,6 +190,119 @@ class PurePursuitController(Node):
             self.get_logger().error(f'Waypoint読み込みエラー: {e}')
             return []
         return waypoints
+    #　ENU座標系：地球上のある1点を原点として「東・北・上に何メートルか」で位置を表すローカルな座標系。
+    #　ECEF座標系：地球の重心を原点として全地球を1つの座標系で表す。単位はメートル。
+    #　ECEF座標系をpm.ecef2geodetic(ox, oy, oz)で緯度経度にし、返している
+    def _get_enu_origin(self, msg: GnssSolution):
+        """ENU原点のECEF座標を検証し(lat, lon, alt)を返す。未確定ならNoneを返す。"""
+        ox, oy, oz = msg.pos_enu_org_ecef.x, msg.pos_enu_org_ecef.y, msg.pos_enu_org_ecef.z
+        if ox == 0.0 and oy == 0.0 and oz == 0.0:
+            return None
+        return pm.ecef2geodetic(ox, oy, oz)
+    #　全WPのLLH座標系（緯度経度高さ）をENU座標系基準にする。また、高さは使わない
+    def _convert_llh_to_enu(self, origin_lat: float, origin_lon: float,
+                             origin_alt: float) -> np.ndarray:
+        """全WPのLLH座標をENU平面座標(x, y)に変換してndarrayで返す。"""
+        llh_arr = np.array(self.wps_llh)
+        e, n, _ = pm.geodetic2enu(
+            llh_arr[:, 0], llh_arr[:, 1], llh_arr[:, 2],
+            origin_lat, origin_lon, origin_alt
+        )
+        return np.column_stack([e, n])
+    #　起動時にセグメントやWPごとの設定を行う関数
+    def _log_route_info(self):
+        #　コーナーの設定
+        if self._corner_wp_set:
+            for idx in sorted(self._corner_wp_set):
+                seg_idx    = (idx - 1) % len(self._seg_speeds)
+                approach_v = self._seg_speeds[seg_idx]
+                corner_v   = approach_v * self.corner_slowdown_ratio
+                corner_d   = self.corner_slowdown_base_dist * (approach_v / self.speed_min)
+                self.get_logger().info(
+                    f'  コーナーWP[{idx}]  '
+                    f'減速 {corner_d:.1f}m手前 {approach_v:.2f}→{corner_v:.2f}m/s'
+                )
+        else:
+            self.get_logger().info('減速WP指定なし → 全WPを順に追従')
+        #　到達半径の設定
+        if self._wp_radius_map:
+            overrides = ', '.join(
+                f'WP[{i}]={r:.2f}m' for i, r in sorted(self._wp_radius_map.items())
+            )
+            self.get_logger().info(
+                f'WP到達半径: デフォルト {self.waypoint_radius:.2f}m  個別設定 → {overrides}'
+            )
+        else:
+            self.get_logger().info(f'WP到達半径: 全WP共通 {self.waypoint_radius:.2f}m')
+        #　ENU変換完了と最初の目標WP
+        self.get_logger().info(
+            f'GNSS ENU原点確定 → Waypoint {len(self.waypoints)}点変換完了。'
+            f'最初の目標 → X={self.waypoints[0, 0]:.2f}m, Y={self.waypoints[0, 1]:.2f}m'
+        )
+    #　3つの関数を決まった順序で呼ぶ関数
+    def _initialize_route(self, msg: GnssSolution):
+        """ENU原点確定後にルートを初期化する。
+        原点解決 → ENU変換 → WPスキップ → セグメントパラメータ計算 → ログ出力
+        """
+        origin = self._get_enu_origin(msg)
+        if origin is None:
+            return
+        self.waypoints = self._convert_llh_to_enu(*origin)
+        self._compute_segment_params()
+        self._log_route_info()
+    #　どこからでも走行開始できるように現在地と各WPの差を計算して最も近いインデックスを返す
+    def _nearest_wp_index(self) -> int:
+        """現在位置に最も近いWPのインデックスを返す。
+        途中スタートやリカバリ時に waypoint_index を現在地に合わせるために使う。
+        """
+        dists = np.hypot(
+            self.waypoints[:, 0] - self.current_x,
+            self.waypoints[:, 1] - self.current_y
+        )
+        return int(np.argmin(dists))
+    #　到達したWPの判定をして、到達している場合は次のWPのENUをかえす。
+    def _check_wp_arrival(self, tx0: float, ty0: float) -> tuple:
+        """現在WPへの到達を判定し、到達していればインデックスを更新する。
+        Returns:
+            arrived  (bool)  : WPに到達したか
+            passed_idx (int) : 通過したWPのインデックス
+            dist (float)     : WPまでの距離 [m]
+            new_tx0 (float)  : 更新後の目標WP X座標
+            new_ty0 (float)  : 更新後の目標WP Y座標
+        """
+        dist = math.hypot(tx0 - self.current_x, ty0 - self.current_y)
+        radius = self._wp_radius_map.get(self.waypoint_index, self.waypoint_radius)
+        #　半径より距離が大きいのでまだ到達していないとき
+        if dist > radius:
+            return False, self.waypoint_index, dist, tx0, ty0
+
+        passed_idx = self.waypoint_index
+        self.score += 10
+        self.get_logger().info(
+            f'★ WP[{passed_idx}] 通過！ (到達距離={dist:.2f}m) '
+            f'ゲート通過 +10点 → 合計{self.score}点'
+        )
+
+        self.waypoint_index += 1
+        #　すべてのWPを到達したときそれを記録して、再周回するためにインデックスを0に
+        if self.waypoint_index >= len(self.waypoints):
+            self.score += 50
+            self.get_logger().info(
+                f'★★★ 1周完了！ 周回ボーナス +50点 → 合計{self.score}点 '
+                f'停止せずWP[0]から再周回します'
+            )
+            self.waypoint_index = 0
+
+        new_tx0, new_ty0 = self.waypoints[self.waypoint_index]
+        self.get_logger().info(
+            f'次の目標 → WP[{self.waypoint_index}] X={new_tx0:.2f}m, Y={new_ty0:.2f}m'
+        )
+
+        return True, passed_idx, dist, float(new_tx0), float(new_ty0)
+
+    # ================================================================
+    # 2. セグメントパラメータ計算
+    # ================================================================
 
     def _compute_segment_params(self):
         speeds, gains = [], []
@@ -189,7 +310,7 @@ class PurePursuitController(Node):
 
         self.get_logger().info('--- セグメントパラメータ ---')
         for i, ((e1, n1), (e2, n2)) in enumerate(
-            zip(self.waypoints[:-1], self.waypoints[1:])
+            zip(self.waypoints, np.roll(self.waypoints, -1, axis=0))
         ):
             d = math.hypot(e2 - e1, n2 - n1)
 
@@ -209,62 +330,9 @@ class PurePursuitController(Node):
         self._seg_speeds = speeds
         self._seg_gains  = gains
 
-    def _resolve_origin_and_convert(self, msg: GnssSolution):
-        ox, oy, oz = msg.pos_enu_org_ecef.x, msg.pos_enu_org_ecef.y, msg.pos_enu_org_ecef.z
-
-        if ox == 0.0 and oy == 0.0 and oz == 0.0:
-            return
-
-        origin_lat, origin_lon, origin_alt = pm.ecef2geodetic(ox, oy, oz)
-        llh_arr = np.array(self.wps_llh)
-        e, n, _u = pm.geodetic2enu(
-            llh_arr[:, 0], llh_arr[:, 1], llh_arr[:, 2],
-            origin_lat, origin_lon, origin_alt
-        )
-        self.waypoints = np.column_stack([e, n])
-
-        if self._skip_wp_set:
-            n_total    = len(self.waypoints)
-            valid_skip = {i for i in self._skip_wp_set if 0 < i < n_total - 1}
-            if valid_skip:
-                keep         = [i for i in range(n_total) if i not in valid_skip]
-                old_to_new   = {old: new for new, old in enumerate(keep)}
-                self.waypoints       = self.waypoints[np.array(keep)]
-                self._corner_wp_set  = {old_to_new[i] for i in self._corner_wp_set  if i in old_to_new}
-                self._lh_ramp_wp_set = {old_to_new[i] for i in self._lh_ramp_wp_set if i in old_to_new}
-                self._wp_radius_map  = {
-                    old_to_new[i]: r for i, r in self._wp_radius_map.items() if i in old_to_new
-                }
-                self.get_logger().info(
-                    f'WPスキップ: 元WP{sorted(valid_skip)} を除外 → {len(self.waypoints)}点で走行'
-                )
-
-        self._compute_segment_params()
-
-        if self._corner_wp_set:
-            for idx in sorted(self._corner_wp_set):
-                seg_idx    = max(0, idx - 1) % len(self._seg_speeds)
-                approach_v = self._seg_speeds[seg_idx]
-                corner_v   = approach_v * self.corner_slowdown_ratio
-                corner_d   = self.corner_slowdown_base_dist * (approach_v / self.speed_min)
-                r          = self._wp_radius_map.get(idx, self.waypoint_radius)
-                self.get_logger().info(
-                    f'  コーナーWP[{idx}]  到達半径={r:.2f}m  '
-                    f'減速 {corner_d:.1f}m手前 {approach_v:.2f}→{corner_v:.2f}m/s'
-                )
-        else:
-            self.get_logger().info('減速WP指定なし → 全WPを順に追従')
-
-        if self._wp_radius_map:
-            for idx, r in sorted(self._wp_radius_map.items()):
-                self.get_logger().info(f'  WP[{idx}] 到達半径: {r:.2f}m（個別指定）')
-        else:
-            self.get_logger().info(f'WP到達半径: 全WP共通 {self.waypoint_radius:.2f}m')
-
-        self.get_logger().info(
-            f'GNSS ENU原点確定 → Waypoint {len(self.waypoints)}点変換完了。'
-            f'最初の目標 → X={self.waypoints[0, 0]:.2f}m, Y={self.waypoints[0, 1]:.2f}m'
-        )
+    # ================================================================
+    # 3. GNSSコールバック・自己位置推定
+    # ================================================================
 
     def _gnss_callback(self, msg: GnssSolution):
         self.current_status = msg.status
@@ -279,7 +347,7 @@ class PurePursuitController(Node):
             self.get_logger().info('★ 起動後初回のFIXを達成 → 走行を開始します')
 
         if self.waypoints is None:
-            self._resolve_origin_and_convert(msg)
+            self._initialize_route(msg)
             return
 
         ve, vn = msg.vel_enu.x, msg.vel_enu.y
@@ -304,6 +372,10 @@ class PurePursuitController(Node):
 
         self._control()
 
+    # ================================================================
+    # 4. Pure Pursuit ステアリング・速度制御
+    # ================================================================
+
     def _lookahead_target(self, lookahead_dist: float):
         idx = self.waypoint_index
         px, py = self.current_x, self.current_y
@@ -321,7 +393,7 @@ class PurePursuitController(Node):
         return float(self.waypoints[-1][0]), float(self.waypoints[-1][1])
 
     def _seg_params(self):
-        if self.waypoint_index == 0 or not self._seg_speeds:
+        if not self._seg_speeds:
             return self.speed_min, 0.0
         idx = (self.waypoint_index - 1) % len(self._seg_speeds)
         return self._seg_speeds[idx], self._seg_gains[idx]
@@ -355,24 +427,8 @@ class PurePursuitController(Node):
         corner_speed = seg_speed * self.corner_slowdown_ratio
         corner_dist  = self.corner_slowdown_base_dist * (seg_speed / self.speed_min)
 
-        dist_to_wp     = math.hypot(tx0 - self.current_x, ty0 - self.current_y)
-        arrival_radius = self._wp_radius_map.get(self.waypoint_index, self.waypoint_radius)
-        if dist_to_wp <= arrival_radius:
-            passed_idx = self.waypoint_index
-            self.score += 10
-            self.get_logger().info(
-                f'★ WP[{passed_idx}] 通過！ (到達距離={dist_to_wp:.2f}m) '
-                f'ゲート通過 +10点 → 合計{self.score}点'
-            )
-            self.waypoint_index += 1
-            if self.waypoint_index >= len(self.waypoints):
-                self.score += 50
-                self.get_logger().info(
-                    f'★★★ 1周完了！ 周回ボーナス +50点 → 合計{self.score}点 '
-                    f'停止せずWP[0]から再周回します'
-                )
-                self.waypoint_index = 0
-
+        arrived, passed_idx, _, tx0, ty0 = self._check_wp_arrival(tx0, ty0)
+        if arrived:
             next_seg_speed, next_seg_gain = self._seg_params()
             if passed_idx in self._corner_wp_set:
                 ramp_from = corner_speed
@@ -408,11 +464,6 @@ class PurePursuitController(Node):
                 )
             else:
                 self._lh_gain_ramp_remaining = 0.0
-
-            tx0, ty0 = self.waypoints[self.waypoint_index]
-            self.get_logger().info(
-                f'次の目標 → WP[{self.waypoint_index}] X={tx0:.2f}m, Y={ty0:.2f}m'
-            )
 
         prev_idx = self.waypoint_index - 1
         sx, sy = (
@@ -497,6 +548,10 @@ class PurePursuitController(Node):
             f'速度={cmd_speed:.2f}m/s(seg={seg_speed:.2f})  '
             f'Status={"FIX" if self.current_status == GnssSolution.STATUS_FIX else "FLOAT"}'
         )
+
+    # ================================================================
+    # 5. 安全系
+    # ================================================================
 
     def _safety_check(self):
         elapsed = (self.get_clock().now() - self.last_gnss_time).nanoseconds / 1e9

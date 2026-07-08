@@ -13,17 +13,16 @@ control_bringup.launch.py
 GNSS側（gnss_bringup.launch.py）が既にFIXに達していれば、このlaunchファイルを
 起動した直後の最初の/gnss/solutionでFIXが判定されるので、収束待ちは発生しない。
 
-waypointは緯度経度（WP,Latitude(deg),Longitude(deg),Ellipsoidal Height(m)）の
-CSVを使用する（デフォルト: wp_position_basic.csv）。
+course引数でコースを選択する（デフォルト: basic）:
+  ros2 launch cc02_autodrive control_bringup.launch.py course:=basic
+  ros2 launch cc02_autodrive control_bringup.launch.py course:=advance
 
-gnss_logger_nodeは/gnss/solutionを毎回CSVに記録する（デフォルト: ~/ros2_ws/gnss_logs/
-gnss_log_latest.csv。固定ファイル名で、毎回起動時に上書きされる。過去のログを残したい
-場合はlog_file引数で別名を指定すること）。走行後にmatlab/plot_log_map.mで地図に
-表示できる（MATLAB環境で、ログCSVを転送してから実行: 詳細はCLAUDE.md参照）。
+courseに応じてwaypointファイルとログファイル名が自動で切り替わる:
+  basic   → wp_position_basic.csv   / gnss_log_basic_latest.csv
+  advance → wp_position_advance.csv / gnss_log_advance_latest.csv
 
-使用例:
-  ros2 launch cc02_autodrive control_bringup.launch.py
-  ros2 launch cc02_autodrive control_bringup.launch.py wp_file:=/path/to/wp.csv
+gnss_logger_nodeは/gnss/solutionをCSVに記録する。走行後にmatlab/plot_log_map.mで
+地図に表示できる（MATLAB環境で、ログCSVを転送してから実行: 詳細はCLAUDE.md参照）。
 """
 
 import os
@@ -31,7 +30,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -40,40 +39,42 @@ def generate_launch_description():
     cc02_share = get_package_share_directory('cc02_autodrive')
 
     vehicle_driver_config = os.path.join(rc_car_share, 'config', 'vehicle_driver.yaml')
-    default_wp_file = os.path.join(cc02_share, 'wp_position_basic.csv')
 
     log_dir = os.path.join(os.path.expanduser('~'), 'ros2_ws', 'gnss_logs')
     os.makedirs(log_dir, exist_ok=True)
 
-    default_log_file = os.path.join(log_dir, 'gnss_log_latest.csv')
-    default_pp_log   = os.path.join(log_dir, 'pure_pursuit_log_latest.csv')
-
+    course_arg = DeclareLaunchArgument(
+        'course',
+        default_value='basic',
+        description="コース選択: 'basic' / 'advance'"
+    )
     wp_file_arg = DeclareLaunchArgument(
         'wp_file',
-        default_value=default_wp_file,
-        description='Waypoint CSV（WP,Latitude(deg),Longitude(deg),Ellipsoidal Height(m)）の絶対パス'
+        default_value=PythonExpression([
+            f'"{cc02_share}/wp_position_" + "',
+            LaunchConfiguration('course'),
+            '" + ".csv"'
+        ]),
+        description='Waypoint CSV の絶対パス（省略時は course から自動決定）'
     )
     log_file_arg = DeclareLaunchArgument(
         'log_file',
-        default_value=default_log_file,
-        description='/gnss/solutionの記録先CSVファイルの絶対パス'
+        default_value=PythonExpression([
+            f'"{log_dir}/gnss_log_" + "',
+            LaunchConfiguration('course'),
+            '" + "_latest.csv"'
+        ]),
+        description='/gnss/solution の記録先CSVファイルの絶対パス（省略時は course から自動決定）'
     )
     tuning_log_file_arg = DeclareLaunchArgument(
         'tuning_log_file',
-        default_value=default_pp_log,
-        description='Pure Pursuit チューニングログの絶対パス'
+        default_value=PythonExpression([
+            f'"{log_dir}/pure_pursuit_log_" + "',
+            LaunchConfiguration('course'),
+            '" + "_latest.csv"'
+        ]),
+        description='Pure Pursuit チューニングログの絶対パス（省略時は course から自動決定）'
     )
-    corner_wp_indices_arg = DeclareLaunchArgument(
-        'corner_wp_indices',
-        default_value='2,6,8',
-        description='減速するWPインデックスをカンマ区切りで指定（0-based、例: 2,6,8）'
-    )
-    wp_radii_arg = DeclareLaunchArgument(
-        'wp_radii',
-        default_value='',
-        description='WPごとの到達半径（0-basedインデックス:半径のカンマ区切り、例: 3:1.5,7:2.0）空=全WP共通wp_radiusを使用'
-    )
-
     pure_pursuit_node = Node(
         package='cc02_autodrive',
         executable='pure_pursuit_node',
@@ -81,9 +82,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'wp_file': LaunchConfiguration('wp_file'),
-            'corner_wp_indices': LaunchConfiguration('corner_wp_indices'),
             'tuning_log_file': LaunchConfiguration('tuning_log_file'),
-            'wp_radii': LaunchConfiguration('wp_radii'),
         }],
     )
 
@@ -104,11 +103,10 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        course_arg,
         wp_file_arg,
         log_file_arg,
         tuning_log_file_arg,
-        corner_wp_indices_arg,
-        wp_radii_arg,
         pure_pursuit_node,
         vehicle_driver_node,
         gnss_logger_node,

@@ -7,11 +7,13 @@ function plot_log_map(log_csv, wp_file)
 %   使用例:
 %       plot_log_map('gnss_log_latest.csv', 'wp_position_basic.csv')
 
-%% ---- コントローラパラメータ（control_bringup の設定と合わせること）----
-WP_RADIUS    = 0.7;            % m: デフォルトWP到達半径 (wp_radius)
-WP_RADII_STR = '5:1.2,7:2.0'; % 個別半径 (0-based・skip前) ← wp_radii と合わせること
-CORNER_IDX   = [0,2,6,8];     % corner_wp_indices (0-based)
-SKIP_IDX     = [3];            % wp_skip_indices (0-based) ← wp_skip_indices と合わせること
+%% ---- コントローラパラメータ（pure_pursuit_controller.py の declare_parameter と合わせること）----
+% WPのコーナー・到達半径はコントローラと同じロジックで自動計算する（手動設定不要）
+CORNER_ANGLE_THRESH_DEG  = 30.0;  % corner_angle_thresh_deg：これ以上の偏向角をコーナーと判定
+LH_RAMP_ANGLE_THRESH_DEG = 50.0;  % lh_ramp_angle_thresh_deg
+WP_RADIUS_MAX             = 2.0;   % wp_radius_max [m]
+WP_RADIUS_MIN             = 0.5;   % wp_radius_min [m]
+WP_RADIUS_SEG_RATIO       = 0.3;   % wp_radius_seg_ratio
 
 if nargin < 2, wp_file = ''; end
 
@@ -75,64 +77,55 @@ origin_lon = wp_lon(1);
 
 [wp_e, wp_n] = latlon2enu(wp_lat, wp_lon, origin_lat, origin_lon);
 
-% WP_RADII_STR をパース → radius_map (0-based raw index → radius)
-radius_map = containers.Map('KeyType','int32','ValueType','double');
-if ~isempty(WP_RADII_STR)
-    for tok = strsplit(WP_RADII_STR, ',')
-        parts = strsplit(strtrim(tok{1}), ':');
-        if numel(parts) == 2
-            try
-                radius_map(int32(str2double(parts{1}))) = str2double(parts{2});
-            catch; end
-        end
-    end
-end
-
-%% ---- WPスキップ適用 -----------------------------------------------
-valid_skip = SKIP_IDX(SKIP_IDX > 0 & SKIP_IDX < n_wp - 1);  % 0-based
-keep_0  = setdiff(0:n_wp-1, valid_skip);  % 0-based
-keep_1  = keep_0 + 1;                      % 1-based
-wps_e   = wp_e(keep_1);
-wps_n   = wp_n(keep_1);
-wps_lat = wp_lat(keep_1);
-wps_lon = wp_lon(keep_1);
-n_wps   = numel(wps_e);
-
-% old(0-based) → new(0-based) マッピング
-old2new = -ones(1, n_wp);
-for ni = 0:numel(keep_0)-1
-    old2new(keep_0(ni+1)+1) = ni;
-end
-
-% radius_map をスキップ後の新インデックスにリマップ
+%% ---- コーナー・到達半径をコントローラと同じロジックで自動計算 --------
+% pure_pursuit_controller.py の _detect_corner_wps() と同じ計算
+corner_new  = [];   % コーナーWPの0-basedインデックス
+lh_ramp_new = [];   % lh_ramp WPの0-basedインデックス
 rm_new = containers.Map('KeyType','int32','ValueType','double');
-for k = keys(radius_map)
-    oi = double(k{1});
-    if oi+1 >= 1 && oi+1 <= n_wp && old2new(oi+1) >= 0
-        rm_new(int32(old2new(oi+1))) = radius_map(int32(oi));
+
+fprintf('\n--- WP自動解析 (corner≥%.0f°, lh_ramp≥%.0f°, r_min=%.1fm r_max=%.1fm) ---\n', ...
+    CORNER_ANGLE_THRESH_DEG, LH_RAMP_ANGLE_THRESH_DEG, WP_RADIUS_MIN, WP_RADIUS_MAX);
+
+for i = 0:n_wp-1
+    i1     = i + 1;
+    prev1  = mod(i - 1, n_wp) + 1;
+    next1  = mod(i + 1, n_wp) + 1;
+    v_in   = [wp_e(i1) - wp_e(prev1), wp_n(i1) - wp_n(prev1)];
+    v_out  = [wp_e(next1) - wp_e(i1), wp_n(next1) - wp_n(i1)];
+    len_in  = norm(v_in);
+    len_out = norm(v_out);
+    if len_in < 0.1 || len_out < 0.1
+        fprintf('  WP[%d] スキップ（ほぼ同位置）\n', i);
+        continue
     end
-end
+    cos_a = dot(v_in, v_out) / (len_in * len_out);
+    cos_a = max(-1.0, min(1.0, cos_a));
+    deg   = rad2deg(acos(cos_a));
 
-% corner_idx をスキップ後の新インデックスにリマップ
-corner_new = [];
-for c = CORNER_IDX
-    if c+1 >= 1 && c+1 <= n_wp && old2new(c+1) >= 0
-        corner_new(end+1) = old2new(c+1); %#ok<AGROW>
+    tag = '';
+    if deg >= CORNER_ANGLE_THRESH_DEG
+        corner_new(end+1)  = i; %#ok<AGROW>
+        tag = [tag ' ← コーナー'];
     end
+    if deg >= LH_RAMP_ANGLE_THRESH_DEG
+        lh_ramp_new(end+1) = i; %#ok<AGROW>
+        tag = [tag ' [lh_ramp]'];
+    end
+    r_angle = WP_RADIUS_MAX * (1.0 - deg / 180.0);
+    r_seg   = min(len_in, len_out) * WP_RADIUS_SEG_RATIO;
+    r       = max(WP_RADIUS_MIN, min(r_angle, r_seg));
+    rm_new(int32(i)) = r;
+    fprintf('  WP[%d] 偏向角=%.1f°  r=%.2fm%s\n', i, deg, r, tag);
 end
 
-%% ---- 元のWP直線経路（薄い破線）--------------------------------------
-geoplot(gx, wp_lat, wp_lon, '--', 'Color', [0.5 0.5 1], 'LineWidth', 1.0, ...
-    'DisplayName', '元のWP経路（skip前）');
+% スキップWPなし（コントローラと同じ）
+wps_e   = wp_e;
+wps_n   = wp_n;
+wps_lat = wp_lat;
+wps_lon = wp_lon;
+n_wps   = n_wp;
 
-% スキップされたWP
-if ~isempty(valid_skip)
-    sk1 = valid_skip + 1;
-    geoscatter(gx, wp_lat(sk1), wp_lon(sk1), 80, [0.5 0.5 0.5], 'x', ...
-        'LineWidth', 2, 'DisplayName', 'スキップWP');
-end
-
-%% ---- コントローラが走行するWP経路（skip適用後）---------------------
+%% ---- WP直線経路 -----------------------------------------------------
 geoplot(gx, wps_lat, wps_lon, '-', 'Color', [0 0.3 1], 'LineWidth', 2.2, ...
     'DisplayName', 'コントローラ経路（skip後）');
 
@@ -159,7 +152,7 @@ for ni = 0:n_wps-1
     if isKey(rm_new, int32(ni))
         r = rm_new(int32(ni));
     else
-        r = WP_RADIUS;
+        r = WP_RADIUS_MIN;
     end
     cx = e_i + r*cos(th);
     cy = n_i + r*sin(th);
@@ -183,14 +176,15 @@ geoscatter(gx, NaN, NaN, 50, 'm', 'v', 'filled', 'DisplayName', 'Waypoint（skip
 geoscatter(gx, NaN, NaN, 70, 'r', 'd', 'filled', 'DisplayName', 'コーナーWP');
 
 %% ---- コンソール出力（WP一覧）---------------------------------------
-fprintf('\n--- コントローラ経路 WP一覧（skip後、%d点）---\n', n_wps);
+fprintf('\n--- コントローラ経路 WP一覧（%d点）---\n', n_wps);
 for ni = 0:n_wps-1
     tag = '';
-    if ismember(ni, corner_new), tag = '  ← コーナー'; end
+    if ismember(ni, corner_new),  tag = [tag '  ← コーナー']; end
+    if ismember(ni, lh_ramp_new), tag = [tag ' [lh_ramp]'];   end
     if isKey(rm_new, int32(ni))
         r = rm_new(int32(ni));
     else
-        r = WP_RADIUS;
+        r = WP_RADIUS_MIN;
     end
     fprintf('  [%2d] E=%+7.2fm N=%+8.2fm  r=%.2fm%s\n', ...
         ni, wps_e(ni+1), wps_n(ni+1), r, tag);
