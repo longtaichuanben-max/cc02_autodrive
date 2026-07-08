@@ -9,8 +9,8 @@ function plot_log_map(log_csv, wp_file)
 
 %% ---- コントローラパラメータ（pure_pursuit_controller.py の declare_parameter と合わせること）----
 % WPのコーナー・到達半径はコントローラと同じロジックで自動計算する（手動設定不要）
-CORNER_ANGLE_THRESH_DEG  = 30.0;  % corner_angle_thresh_deg：これ以上の偏向角をコーナーと判定
-LH_RAMP_ANGLE_THRESH_DEG = 50.0;  % lh_ramp_angle_thresh_deg
+CORNER_ANGLE_THRESH_DEG  = 40.0;  % corner_angle_thresh_deg：これ以上の偏向角をコーナーと判定
+LH_RAMP_ANGLE_THRESH_DEG = 85.0;  % lh_ramp_angle_thresh_deg
 WP_RADIUS_MAX             = 2.0;   % wp_radius_max [m]
 WP_RADIUS_MIN             = 0.5;   % wp_radius_min [m]
 WP_RADIUS_SEG_RATIO       = 0.3;   % wp_radius_seg_ratio

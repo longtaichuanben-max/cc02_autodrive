@@ -59,8 +59,8 @@ class PurePursuitController(Node):
         self.declare_parameter('heading_smoothing_w', 0.35)             # ヘディングの指数移動平均の重み（0〜1）：大きいほど最新値に追従、小さいほど平滑化
         self.declare_parameter('max_speed_mps', 4.0)                    # 速度コマンドの絶対上限 [m/s]：いかなる計算結果もこれを超えない
         self.declare_parameter('gnss_timeout_s', 2.0)                   # GNSSデータが途絶えたとみなすタイムアウト時間 [s]：超過で安全停止
-        self.declare_parameter('corner_angle_thresh_deg', 30.0)         # コーナー自動検出の偏向角閾値 [deg]：これ以上の偏向角を持つWPをコーナーと判定
-        self.declare_parameter('lh_ramp_angle_thresh_deg', 50.0)        # lh_ramp自動検出の偏向角閾値 [deg]：コーナー出口でルックアヘッドを徐々に伸ばす対象
+        self.declare_parameter('corner_angle_thresh_deg', 40.0)         # コーナー自動検出の偏向角閾値 [deg]：これ以上の偏向角を持つWPをコーナーと判定
+        self.declare_parameter('lh_ramp_angle_thresh_deg', 85.0)        # lh_ramp自動検出の偏向角閾値 [deg]：コーナー出口でルックアヘッドを徐々に伸ばす対象
         self.declare_parameter('corner_slowdown_ratio', 0.6)            # コーナー通過速度の割合：コーナーWP通過時の速度 = セグメント速度 × この値
         self.declare_parameter('corner_slowdown_base_dist', 10.0)       # 減速・加速ランプの基準距離 [m]：speed_minセグメントでのランプ距離、速度に比例してスケール
         default_log = os.path.join(
