@@ -59,10 +59,11 @@ class PurePursuitController(Node):
         self.declare_parameter('heading_smoothing_w', 0.35)             # ヘディングの指数移動平均の重み（0〜1）：大きいほど最新値に追従、小さいほど平滑化
         self.declare_parameter('max_speed_mps', 4.0)                    # 速度コマンドの絶対上限 [m/s]：いかなる計算結果もこれを超えない
         self.declare_parameter('gnss_timeout_s', 2.0)                   # GNSSデータが途絶えたとみなすタイムアウト時間 [s]：超過で安全停止
-        self.declare_parameter('corner_angle_thresh_deg', 40.0)         # コーナー自動検出の偏向角閾値 [deg]：これ以上の偏向角を持つWPをコーナーと判定
+        self.declare_parameter('corner_angle_thresh_deg', 36.0)         # コーナー自動検出の偏向角閾値 [deg]：これ以上の偏向角を持つWPをコーナーと判定
         self.declare_parameter('lh_ramp_angle_thresh_deg', 85.0)        # lh_ramp自動検出の偏向角閾値 [deg]：コーナー出口でルックアヘッドを徐々に伸ばす対象
-        self.declare_parameter('corner_slowdown_ratio', 0.6)            # コーナー通過速度の割合：コーナーWP通過時の速度 = セグメント速度 × この値
-        self.declare_parameter('corner_slowdown_base_dist', 10.0)       # 減速・加速ランプの基準距離 [m]：speed_minセグメントでのランプ距離、速度に比例してスケール
+        self.declare_parameter('corner_slowdown_ratio', 0.35)            # コーナー通過速度の割合：コーナーWP通過時の速度 = セグメント速度 × この値
+        self.declare_parameter('corner_slowdown_base_dist',1.8)        # 減速・加速ランプの基準距離 [m]：speed_minセグメントでのランプ距離、速度に比例してスケール
+        self.declare_parameter('corner_accel_ratio', 1.0)              # 加速ランプ距離の比率：decel_dist × この値。1.0=減速と同じ傾き、>1.0=緩やか、<1.0=急
         default_log = os.path.join(
             os.path.expanduser('~'), 'ros2_ws', 'gnss_logs', 'pure_pursuit_log_latest.csv'
         )
@@ -89,6 +90,7 @@ class PurePursuitController(Node):
         self._lh_ramp_angle_thresh_deg = self.get_parameter('lh_ramp_angle_thresh_deg').value
         self.corner_slowdown_ratio     = self.get_parameter('corner_slowdown_ratio').value
         self.corner_slowdown_base_dist = self.get_parameter('corner_slowdown_base_dist').value
+        self.corner_accel_ratio        = self.get_parameter('corner_accel_ratio').value
         tuning_log_file                = self.get_parameter('tuning_log_file').value
 
         self._tuning_csv_file = open(tuning_log_file, 'w', newline='')
@@ -208,9 +210,12 @@ class PurePursuitController(Node):
                 approach_v = self._seg_speeds[seg_idx]
                 corner_v   = approach_v * self.corner_slowdown_ratio
                 corner_d   = self.corner_slowdown_base_dist * (approach_v / self.speed_min)
+                accel_d = corner_d * self.corner_accel_ratio
+                exit_v  = self._seg_speeds[idx % len(self._seg_speeds)]
                 self.get_logger().info(
                     f'  コーナーWP[{idx}]  '
-                    f'減速 {corner_d:.1f}m手前 {approach_v:.2f}→{corner_v:.2f}m/s'
+                    f'減速 {corner_d:.1f}m手前 {approach_v:.2f}→{corner_v:.2f}m/s  '
+                    f'加速 ~{accel_d:.1f}m {corner_v:.2f}→{exit_v:.2f}m/s（セグ長でクランプあり）'
                 )
         else:
             self.get_logger().info('コーナーWP検出なし → 全WPを順に追従')
@@ -479,9 +484,13 @@ class PurePursuitController(Node):
         arrived, passed_idx, _, tx0, ty0 = self._check_wp_arrival(tx0, ty0)
         if arrived:
             next_seg_speed, next_seg_gain = self._seg_params()
+            next_seg_len = float(np.hypot(
+                self.waypoints[self.waypoint_index][0] - self.waypoints[passed_idx][0],
+                self.waypoints[self.waypoint_index][1] - self.waypoints[passed_idx][1]
+            ))
             if passed_idx in self._corner_wp_set:
                 ramp_from = corner_speed
-                ramp_dist = corner_dist
+                ramp_dist = min(corner_dist * self.corner_accel_ratio, next_seg_len)
                 self.get_logger().info(
                     f'コーナーWP[{passed_idx}]通過 → 出口ランプ {ramp_dist:.1f}m '
                     f'({ramp_from:.2f}→{next_seg_speed:.2f}m/s)'
@@ -490,6 +499,9 @@ class PurePursuitController(Node):
                 ramp_from = max(self.speed_min, self._last_cmd_speed)
                 max_delta = max(self.speed_max - self.speed_min, 1e-3)
                 ramp_dist = self.corner_slowdown_base_dist * abs(next_seg_speed - ramp_from) / max_delta
+                if next_seg_speed > ramp_from:
+                    ramp_dist *= self.corner_accel_ratio
+                ramp_dist = min(ramp_dist, next_seg_len)
                 if ramp_dist > 0.01:
                     self.get_logger().info(
                         f'WP[{passed_idx}]通過 → 遷移ランプ {ramp_dist:.1f}m '
